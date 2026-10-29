@@ -49,6 +49,7 @@ class Settings(BaseSettings):
     semantic_min_score: float = Field(default=0.45, ge=-1, le=1)
     visual_min_score: float = Field(default=0.23, ge=-1, le=1)
     api_key: SecretStr = SecretStr("")
+    cors_origins: list[str] = ["http://127.0.0.1:5173", "http://localhost:5173"]
 
     @property
     def database_path(self) -> Path:

@@ -8,9 +8,11 @@ from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from searchy.api.catalog import create_catalog_router
 from searchy.api.schemas import (
     ImportRequest,
     JobResponse,
@@ -41,6 +43,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             application.state.services.close()
 
     application = FastAPI(title="Searchy", version="0.1.0", lifespan=lifespan)
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=config.cors_origins,
+        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_headers=["Content-Type", "X-API-Key", "Range"],
+        expose_headers=[
+            "Content-Range",
+            "Accept-Ranges",
+            "Content-Length",
+            "X-Scene-Start-Offset",
+            "X-Scene-Duration",
+        ],
+    )
 
     def services():
         return application.state.services
@@ -262,6 +277,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             },
         )
 
+    application.include_router(create_catalog_router(config, services, authorize))
     return application
 
 

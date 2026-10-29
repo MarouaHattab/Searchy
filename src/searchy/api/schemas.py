@@ -2,7 +2,7 @@ from typing import Literal
 
 from pydantic import Field, field_validator
 
-from searchy.domain import Dialogue, Observation, Provenance, Record
+from searchy.domain import Dialogue, Observation, Provenance, Record, stable_id
 
 
 class ImportRequest(Record):
@@ -90,7 +90,78 @@ class JobResponse(Record):
     created_at: float
     updated_at: float
     attempts: int
+    title: str | None = None
+    collection_id: str | None = None
+    video_id: str | None = None
 
 
 def public_job(job: dict) -> dict:
-    return {k: v for k, v in job.items() if k in JobResponse.model_fields}
+    result = {k: v for k, v in job.items() if k in JobResponse.model_fields}
+    payload = job.get("payload", {})
+    collection = payload.get("collection_id")
+    result["collection_id"] = collection
+    result["title"] = payload.get("title") or (
+        f"Import {collection}" if job.get("kind") == "import" and collection else None
+    )
+    if job.get("kind") == "upload" and collection and payload.get("digest"):
+        result["video_id"] = stable_id(f"upload:{collection}:{payload['digest']}")
+    return result
+
+
+class LibraryVideo(Record):
+    video_id: str
+    collection_id: str
+    title: str
+    original_id: str
+    source_kind: Literal["import", "upload"]
+    duration: float | None
+    scene_count: int
+    indexed_scenes: int
+    playable_scenes: int
+    thumbnail_scene_id: str | None
+    status: Literal["ready", "partial", "processing", "queued", "failed", "empty"]
+    characters: list[str]
+
+
+class LibraryResponse(Record):
+    items: list[LibraryVideo]
+    total: int
+
+
+class CharacterSummary(Record):
+    id: str
+    name: str
+    reference_url: str | None
+    scene_count: int
+    video_count: int
+    verified_scene_count: int
+    identity_status: Literal["reference", "unverified", "unidentified"]
+
+
+class WorkspaceMetrics(Record):
+    total_videos: int
+    uploaded_videos: int
+    indexed_videos: int
+    total_scenes: int
+    indexed_scenes: int
+    playable_scenes: int
+    metadata_only_scenes: int
+    running_jobs: int
+    queued_jobs: int
+    failed_jobs: int
+    completed_jobs: int
+
+
+class WorkspaceCapabilities(Record):
+    max_upload_mb: int
+    visual_enabled: bool
+    vlm_configured: bool
+    llm_provider: str
+    embedding_model: str
+
+
+class WorkspaceResponse(Record):
+    metrics: WorkspaceMetrics
+    collections: list[dict]
+    featured_scenes: list[SceneDetail]
+    capabilities: WorkspaceCapabilities

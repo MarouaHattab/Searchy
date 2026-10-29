@@ -152,6 +152,27 @@ class MetadataStore:
             ).fetchall()
         return sorted({c for r in rows for c in Scene.model_validate_json(r[0]).characters})
 
+    def catalog_records(self) -> tuple[list[Video], list[tuple[Scene, bool]], list[dict]]:
+        with self.connect() as db:
+            db.execute("BEGIN")
+            videos = [
+                Video.model_validate_json(row[0]) for row in db.execute("SELECT data FROM videos")
+            ]
+            scenes = [
+                (
+                    Scene.model_validate_json(row["data"]),
+                    bool(row["indexed"] and row["index_signature"] == self.index_signature),
+                )
+                for row in db.execute("SELECT data,indexed,index_signature FROM scenes")
+            ]
+            jobs = []
+            for row in db.execute("SELECT * FROM jobs ORDER BY created_at DESC"):
+                job = dict(row)
+                job["payload"] = json.loads(job["payload"])
+                job["result"] = json.loads(job["result"]) if job["result"] else None
+                jobs.append(job)
+        return videos, scenes, jobs
+
     def create_job(self, kind: str, payload: dict) -> dict:
         now = time.time()
         job_id = str(uuid4())
