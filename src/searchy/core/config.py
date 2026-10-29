@@ -9,8 +9,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore", case_sensitive=False)
 
     data_dir: Path = Path("var")
-    import_root: Path = Path("../Multimodal-GraphRAG-main/data/episodes_splitted")
-    character_reference_dir: Path | None = Path("../Multimodal-GraphRAG-main/data/meta")
+    import_root: Path = Path("data/episodes_splitted")
+    character_reference_dir: Path | None = Path("data/meta")
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
     neo4j_password: SecretStr = SecretStr("")

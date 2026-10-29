@@ -43,7 +43,7 @@ Copy `.env.example` only once and keep `.env` private. Settings are read from th
 
 ## Data and timestamps
 
-`IMPORT_ROOT` points to the existing local `data/episodes_splitted` directory by default. Searchy reads it without modifying it and does not redistribute the dataset. Only import media you are authorized to use.
+The available dataset has been copied into Searchy's own `data/` directory. `IMPORT_ROOT=data/episodes_splitted` and `CHARACTER_REFERENCE_DIR=data/meta` point to these local files; the reference project is no longer required. Keep `data/` when moving or backing up Searchy. It is excluded from Git, so a source-only checkout needs its own dataset copy. Only import media you are authorized to use.
 
 The inspected collection contains **24 Friends season-one episodes, 550 captioned chunks, 9,199 subtitle records, six actual MP4 clips, and six character reference PNGs**. There are 544 metadata-only chunks, no full episodes, and no standalone SRT/VTT files. Aggregate captions are reused; merged summaries are excluded to avoid duplication. Generated descriptions have known character/dialogue inaccuracies and remain explicitly **unverified**, with unknown confidence. Subtitle text is stored independently, with no inferred speaker.
 

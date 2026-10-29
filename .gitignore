@@ -9,6 +9,7 @@ __pycache__/
 .ruff_cache/
 .local-tests/
 var/
+data/
 dist/
 *.egg-info/
 *.mp4
