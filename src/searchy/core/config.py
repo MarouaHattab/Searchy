@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     qdrant_api_key: SecretStr = SecretStr("")
     qdrant_collection_name: str = "searchy_scenes"
     llm_provider: Literal["GOOGLE_GENAI", "GROQ"] = "GOOGLE_GENAI"
-    llm_model_id: str = "gemini-2.5-flash-lite"
+    llm_model_id: str = "gemini-3.5-flash-lite"
     gemini_api_key: SecretStr = SecretStr("")
     groq_api_key: SecretStr = SecretStr("")
     embedding_provider: Literal["LOCAL_EMBEDDING"] = "LOCAL_EMBEDDING"

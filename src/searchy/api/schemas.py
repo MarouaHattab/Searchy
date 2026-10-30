@@ -157,6 +157,7 @@ class WorkspaceCapabilities(Record):
     visual_enabled: bool
     vlm_configured: bool
     llm_provider: str
+    llm_model: str
     embedding_model: str
 
 

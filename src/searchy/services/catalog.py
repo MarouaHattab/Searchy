@@ -153,6 +153,7 @@ class CatalogService:
                 visual_enabled=self.settings.visual_enabled,
                 vlm_configured=bool(key.get_secret_value()),
                 llm_provider=self.settings.llm_provider,
+                llm_model=self.settings.llm_model_id,
                 embedding_model=self.settings.embedding_model_id,
             ),
         )

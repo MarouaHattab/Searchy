@@ -210,17 +210,24 @@ class GeminiVision(RestVision):
                 "A visual evidence or identity reference image is unavailable"
             ) from None
         model = quote(self.settings.llm_model_id, safe="-._")
+        schema = VisualAnalysis.model_json_schema()
+        generation = {
+            "maxOutputTokens": 4096,
+            "responseMimeType": "application/json",
+            "responseJsonSchema": schema,
+        }
+        version = re.match(r"^gemini-(\d+)(?:\.(\d+))?", self.settings.llm_model_id)
+        if version and (int(version[1]), int(version[2] or 0)) >= (3, 5):
+            # The 3.5+ schema compiler rejects maxItems; Pydantic still enforces the limit.
+            schema["properties"]["observations"].pop("maxItems", None)
+        else:
+            generation["temperature"] = 0.1
         response = self._post(
             f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
             {"x-goog-api-key": self.settings.gemini_api_key.get_secret_value()},
             {
                 "contents": [{"role": "user", "parts": parts}],
-                "generationConfig": {
-                    "temperature": 0.1,
-                    "maxOutputTokens": 4096,
-                    "responseMimeType": "application/json",
-                    "responseJsonSchema": VisualAnalysis.model_json_schema(),
-                },
+                "generationConfig": generation,
             },
         )
         return "".join(
