@@ -482,9 +482,7 @@ class GraphStore:
         seen_kinds = ("Character", "Clothing", "Action", "Object", "Location")
 
         def read(tx):
-            records = tx.run(
-                _CONTEXT, scenes=scene_ids[:24], collection_id=collection_id
-            )
+            records = tx.run(_CONTEXT, scenes=scene_ids[:24], collection_id=collection_id)
             context = {}
             for record in records:
                 entities: dict[str, list[str]] = {kind: [] for kind in seen_kinds}
@@ -509,6 +507,31 @@ class GraphStore:
             raise SearchyError(
                 "Neo4j context lookup failed. Check the database connection and schema"
             ) from None
+
+    def neighbors(self, scene_ids: list[str], collection_id=None) -> list[str]:
+        query = """
+        UNWIND $scene_ids AS scene_id
+        MATCH (s:Scene {scene_id: scene_id})
+        WHERE ($collection_id IS NULL OR s.collection_id = $collection_id) AND s.start IS NOT NULL
+        CALL {
+            WITH s
+            MATCH (n:Scene)
+            WHERE n.video_id = s.video_id AND n.collection_id = s.collection_id
+                AND n.scene_id <> s.scene_id AND n.start IS NOT NULL
+            RETURN n ORDER BY abs(n.start - s.start), n.start LIMIT 2
+        }
+        RETURN DISTINCT n.scene_id AS scene_id LIMIT 4
+        """
+        try:
+            with self._connection().session(database=self.settings.neo4j_database) as session:
+                return session.execute_read(
+                    lambda tx: [
+                        r["scene_id"]
+                        for r in tx.run(query, scene_ids=scene_ids[:4], collection_id=collection_id)
+                    ]
+                )
+        except Exception:
+            raise SearchyError("Neo4j timeline context is unavailable", 503) from None
 
     def delete_scenes(self, scene_ids: list[str]) -> None:
         if not scene_ids:

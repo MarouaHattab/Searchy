@@ -36,6 +36,7 @@ class GraphRequest(Record):
     collection_id: str | None = Field(default=None, min_length=1, max_length=80)
     max_nodes: int = Field(default=150, ge=1, le=300)
     max_edges: int = Field(default=240, ge=1, le=500)
+    evidence_ids: list[str] = Field(default_factory=list, max_length=120)
 
     @field_validator("scene_ids")
     @classmethod

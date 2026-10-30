@@ -6,6 +6,7 @@ from searchy.retrieval.search import SearchEngine
 from searchy.services.characters import CharacterService
 from searchy.services.recognition import RecognitionService
 from searchy.storage.metadata import MetadataStore
+from searchy.storage.sessions import SearchSessions
 from searchy.storage.vectors import VectorStore
 
 
@@ -27,6 +28,7 @@ class Services:
             )
         )
         self.metadata = MetadataStore(settings.database_path, signature)
+        self.sessions = SearchSessions(self.metadata)
         self.characters = CharacterService(settings, self.metadata)
         self.embeddings = LocalEmbeddings(settings)
         self.visual = VisualEmbeddings(settings) if settings.visual_enabled else None

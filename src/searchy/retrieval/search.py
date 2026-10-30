@@ -124,6 +124,62 @@ def garment_phrases(text: str) -> list[set[str]]:
 def clothing_matches(
     query: str, scene: Scene, requested: list[str], character_ids: list[str] | None = None
 ) -> bool:
+    if len(requested) > 1:
+        mentions = []
+        for name in requested:
+            pattern = (
+                rf"\b{re.escape(name.split()[0])}(?:\s+{re.escape(' '.join(name.split()[1:]))})?\b"
+                if len(name.split()) > 1
+                else rf"\b{re.escape(name)}\b"
+            )
+            mentions.extend(
+                (match.start(), match.end(), name) for match in re.finditer(pattern, query, re.I)
+            )
+        mentions.sort()
+        clauses = []
+        for index, (_, end, name) in enumerate(mentions):
+            part = query[end : mentions[index + 1][0] if index + 1 < len(mentions) else len(query)]
+            if garment_phrases(part) or (
+                re.search(r"\bwear", part, re.I) and normalized_terms(part) & CLOTHING_MODIFIERS
+            ):
+                clauses.append((name, part))
+                previous = index - 1
+                while previous >= 0 and re.fullmatch(
+                    r"\s*(?:and|&)\s*",
+                    query[mentions[previous][1] : mentions[previous + 1][0]],
+                    re.I,
+                ):
+                    clauses.append((mentions[previous][2], part))
+                    previous -= 1
+        if clauses:
+            return all(
+                clothing_matches(
+                    part,
+                    scene,
+                    [name],
+                    [
+                        identifier
+                        for identifier in (character_ids or [])
+                        if any(
+                            (
+                                observation.kind == "character"
+                                and character_matches(observation.value, name)
+                                and identity_key(scene, observation.value, observation.character_id)
+                                == identifier
+                            )
+                            or (
+                                observation.subject
+                                and character_matches(observation.subject, name)
+                                and identity_key(scene, observation.subject, observation.subject_id)
+                                == identifier
+                            )
+                            for observation in scene.observations
+                        )
+                    ]
+                    or None,
+                )
+                for name, part in clauses
+            )
     requirements = garment_phrases(query)
     if not requirements:
         if not re.search(r"\b(wearing|wears|outfits?|clothes|clothing)\b", query, re.IGNORECASE):
@@ -261,6 +317,11 @@ class SearchEngine:
                 )
             character_ids = [values[0]["id"] for values in matches.values()] or None
         requested = characters or self.requested_characters(query, collection_id)
+        from searchy.retrieval.understanding import clothing_query as outfit_query
+        from searchy.retrieval.understanding import understand
+
+        plan = understand(query, requested)
+        graph_query = " ".join(sorted(plan.content_tokens))
         identity_filter = {"character_ids": character_ids} if character_ids else {}
         warnings = []
         if not any(
@@ -283,7 +344,7 @@ class SearchEngine:
                 (
                     "graph",
                     lambda: self.graph.search(
-                        query,
+                        graph_query,
                         requested,
                         collection_id,
                         self.settings.candidate_limit,
@@ -340,7 +401,7 @@ class SearchEngine:
                 evidence[candidate.scene_id].update(candidate.evidence)
                 matched_channels[candidate.scene_id][name] = candidate.score
 
-        query_tokens = tokens(query) - STOP_WORDS
+        query_tokens = set(plan.content_tokens) | {t for name in requested for t in tokens(name)}
         name_tokens = {t for name in requested for t in tokens(name)}
         content_tokens = query_tokens - name_tokens
         action_terms = normalized_terms(" ".join(content_tokens)) & ACTION_WORDS
@@ -349,7 +410,7 @@ class SearchEngine:
             quoted or re.search(r"\b(says?|saying|dialogue|quote)\b", query.lower())
         )
         dialogue_target = content_tokens - {"dialogue", "quote"}
-        clothing_query = re.sub(r'["“].+?["”]', "", query)
+        clothing_query = outfit_query(query)
         if dialogue_intent:
             action_terms = set()
             if not re.search(

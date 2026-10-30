@@ -75,6 +75,8 @@ class SceneMatch(Record):
 
 
 class SearchResponse(Record):
+    search_id: str | None = None
+    query_plan: dict = Field(default_factory=dict)
     query: str
     results: list[SceneMatch]
     warnings: list[str]

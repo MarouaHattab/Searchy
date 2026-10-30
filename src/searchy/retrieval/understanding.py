@@ -18,6 +18,8 @@ QUERY_TYPES = {
     "action",
     "dialogue",
     "relationship",
+    "while",
+    "simultaneously",
     "event",
     "temporal",
     "visual",
@@ -29,7 +31,9 @@ _DIALOGUE_CUES = re.compile(
     r"\b(says?|said|saying|words?|dialogue|quote[ds]?|line|tells?|told|asks?|asked|mentions?)\b",
     re.I,
 )
-_CLOTHING_CUES = re.compile(r"\b(wearing|wears?|wore|outfits?|clothes|clothing|dress(?:ed)?)\b", re.I)
+_CLOTHING_CUES = re.compile(
+    r"\b(wearing|wears?|wore|outfits?|clothes|clothing|dress(?:ed)?)\b", re.I
+)
 _APPEARANCE_CUES = re.compile(
     r"\b(look(?:s|ing)?|appear(?:s|ance)?|hair|beard|glasses|hat|makeup|face)\b", re.I
 )
@@ -95,18 +99,6 @@ SCAFFOLDING_WORDS = {
     "between",
     "both",
     "relationship",
-    "argue",
-    "arguing",
-    "argued",
-    "argument",
-    "fight",
-    "fighting",
-    "talk",
-    "talking",
-    "talked",
-    "conversation",
-    "conversing",
-    "chatting",
     "happening",
     "describe",
     "talk about",
@@ -213,6 +205,11 @@ def understand(
     if not types or _VISUAL_CUES.search(lowered):
         types.append("visual")
     types = list(dict.fromkeys(types))
+    if temporal:
+        types.remove("temporal")
+        types.insert(0, "temporal")
+    elif _CAUSE_CUES.search(lowered):
+        types.insert(0, "narrative")
 
     hints: list[str] = []
     if dialogue_intent and not quoted:

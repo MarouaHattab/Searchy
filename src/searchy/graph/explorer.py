@@ -42,6 +42,7 @@ CALL {
     WITH s
     MATCH (s)-[r:HAS_OBSERVATION]->(o:Observation)
     WHERE o.scene_id = s.scene_id
+        AND (size($evidence_ids) = 0 OR o.observation_id IN $evidence_ids)
     RETURN r, o ORDER BY coalesce(o.verified, false) DESC,
         (o.character_id IS NOT NULL OR o.subject_id IS NOT NULL) DESC,
         (o.kind = 'character') DESC, o.observation_id LIMIT $observation_limit
@@ -63,6 +64,7 @@ CALL {
     WITH s
     MATCH (s)-[r:HAS_DIALOGUE]->(d:Dialogue)
     WHERE d.scene_id = s.scene_id
+        AND (size($evidence_ids) = 0 OR d.dialogue_id IN $evidence_ids)
     RETURN r, d ORDER BY d.start, d.dialogue_id LIMIT $dialogue_limit
 }
 RETURN s.scene_id AS scene_id, d.dialogue_id AS item_id,
@@ -140,6 +142,8 @@ _PROPERTIES = {
         "kind",
         "value",
         "subject",
+        "character_id",
+        "subject_id",
         "evidence",
         "start",
         "end",
@@ -153,6 +157,7 @@ _PROPERTIES = {
         "scene_id",
         "text",
         "speaker",
+        "speaker_id",
         "start",
         "end",
         "method",
@@ -342,10 +347,12 @@ class GraphExplorer:
             evidence_text = {}
             for query, kind, cap, parameter in (
                 (_OBSERVATIONS, "Observation", 8, "observation_limit"),
-                (_DIALOGUE, "Dialogue", 3, "dialogue_limit"),
+                (_DIALOGUE, "Dialogue", 6 if request.evidence_ids else 3, "dialogue_limit"),
             ):
                 counts = defaultdict(int)
-                for row in tx.run(query, scenes=scenes, **{parameter: cap + 1}):
+                for row in tx.run(
+                    query, scenes=scenes, evidence_ids=request.evidence_ids, **{parameter: cap + 1}
+                ):
                     scene_id = row["scene_id"]
                     counts[scene_id] += 1
                     if counts[scene_id] > cap:

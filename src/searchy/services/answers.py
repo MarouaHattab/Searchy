@@ -1,10 +1,16 @@
+import asyncio
+import json
 import re
 from pathlib import Path
 
+import anyio
 import httpx
 
+from searchy.api.exploration import GraphRequest
 from searchy.core.config import Settings
 from searchy.core.errors import InvalidInput, SearchyError
+from searchy.domain import stable_id
+from searchy.graph.explorer import GraphExplorer
 from searchy.models.answers import AnswerProvider, build_prompt
 from searchy.retrieval.search import (
     character_matches,
@@ -16,11 +22,11 @@ from searchy.retrieval.search import (
 )
 from searchy.retrieval.understanding import clothing_query, understand
 from searchy.storage.metadata import MetadataStore
+from searchy.storage.sessions import SearchSessions
 
-MAX_CITED_SCENES = 4
-MAX_CONTEXT_SCENES = 12
-MAX_DESCRIPTION = 700
-MAX_EVIDENCE_PER_SCENE = 6
+MAX_DESCRIPTION = 900
+MAX_EVIDENCE_PER_SCENE = 8
+MAX_CONTEXT_CHARS = 42000
 
 
 class AnswerService:
@@ -32,19 +38,24 @@ class AnswerService:
         graph=None,
         transport: httpx.BaseTransport | None = None,
     ):
-        self.settings = settings
-        self.metadata = metadata
-        self.search = search
-        self.graph = graph
+        self.settings, self.metadata, self.search, self.graph = settings, metadata, search, graph
         self.provider = AnswerProvider(settings, transport)
 
     def answer(
-        self,
-        query: str,
-        scene_ids: list[str],
-        collection_id: str | None = None,
-        character_ids: list[str] | None = None,
+        self, query, scene_ids, collection_id=None, character_ids=None, search_id=None
     ) -> dict:
+        async def collect():
+            async for event, payload in self.stream(
+                query, scene_ids, collection_id, character_ids, search_id
+            ):
+                if event == "answer":
+                    return payload
+
+        return asyncio.run(collect())
+
+    def _prepare(self, query, scene_ids, collection_id, character_ids):
+        requested = self.search.requested_characters(query, collection_id)
+        plan = understand(query, requested)
         response = {
             "status": "insufficient_evidence",
             "answer": "",
@@ -57,16 +68,18 @@ class AnswerService:
             "warnings": [],
             "provider": None,
             "model": None,
-            "query_type": None,
+            "query_type": plan.primary_type,
+            "graph": {
+                "nodes": [],
+                "edges": [],
+                "scene_ids": [],
+                "warnings": [],
+                "truncated": False,
+            },
+            "retrieval": {"strategy": "hybrid_graph_context", "graph_used": False},
         }
-        empty_reason = self._empty_reason(query, scene_ids)
-        if empty_reason:
-            response["warnings"].append(empty_reason)
-            response["query_type"] = understand(query, []).primary_type
-            return response
-
-        scenes = []
-        for scene_id in scene_ids[:MAX_CONTEXT_SCENES]:
+        scenes, blocks = [], []
+        for scene_id in scene_ids[:6]:
             scene = self.metadata.get_scene(scene_id)
             if scene is None:
                 raise SearchyError("A requested scene was not found", 404)
@@ -74,227 +87,361 @@ class AnswerService:
                 raise InvalidInput("Requested scenes must belong to the selected collection")
             if not self.metadata.is_indexed(scene_id):
                 raise SearchyError("A requested scene is not currently indexed", 409)
-            scenes.append(scene)
-
-        requested = self.search.requested_characters(query, collection_id)
-        plan = understand(query, requested)
-        response["query_type"] = plan.primary_type
-        dropped = 0
-        context = []
-        for scene in scenes:
             missing = self._constraints(query, scene, requested, character_ids)
             if missing is None:
-                dropped += 1
                 continue
-            evidence = self._evidence(scene, character_ids)
+            evidence = self._select_evidence(scene, query, character_ids)
             if not evidence:
                 continue
-            context.append(
+            scenes.append(scene)
+            blocks.append(
                 {
-                    "scene_id": scene.scene_id,
+                    "scene_id": scene_id,
+                    "episode_id": scene.episode_id,
+                    "start": scene.start,
+                    "end": scene.end,
                     "timestamp_basis": scene.timestamp_basis,
                     "missing_terms": missing,
-                    "selected_character_ids": character_ids or [],
-                    "playback_available": bool(scene.media and Path(scene.media.path).is_file()),
                 }
             )
             response["evidence"].extend(evidence)
-        if dropped:
+        if not scenes:
             response["warnings"].append(
-                "Some retrieved scenes do not support the query's explicit character, outfit or "
-                "dialogue constraints and were left out of the explanation"
+                "No retrieved scene contains enough evidence to answer this question."
             )
-        if not response["evidence"]:
-            response["warnings"].append(
-                "The retrieved scenes do not contain enough evidence to answer this question"
-            )
-            return response
-
-        relationships = self._graph_context([item["scene_id"] for item in context], collection_id)
-        response["relationships"] = relationships
-        response["constraints"] = self._constraint_report(plan, context, requested, character_ids)
+            return response, {}, scenes
+        if plan.temporal and self.graph is not None:
+            try:
+                neighbors = self.graph.neighbors([s.scene_id for s in scenes[:4]], collection_id)
+                videos = {s.video_id for s in scenes}
+                for identifier in neighbors:
+                    if len(scenes) >= 12 or identifier in {s.scene_id for s in scenes}:
+                        continue
+                    nearby = self.metadata.get_scene(identifier)
+                    if (
+                        nearby is None
+                        or nearby.video_id not in videos
+                        or not self.metadata.is_indexed(identifier)
+                    ):
+                        continue
+                    scenes.append(nearby)
+                    blocks.append(
+                        {
+                            "scene_id": identifier,
+                            "episode_id": nearby.episode_id,
+                            "start": nearby.start,
+                            "end": nearby.end,
+                            "timestamp_basis": nearby.timestamp_basis,
+                            "missing_terms": [],
+                            "role": "adjacent episode timeline context; not an independent query match",
+                        }
+                    )
+                    response["evidence"].extend(self._select_evidence(nearby, query, None)[:3])
+                response["warnings"].append(
+                    "Timeline context follows episode timestamps, not necessarily story chronology."
+                )
+            except SearchyError:
+                response["warnings"].append("Adjacent timeline evidence is unavailable.")
+        # The same evidence selection drives both the model context and the explorer.
+        identifiers = []
+        for item in response["evidence"]:
+            parts = item["evidence_id"].rsplit(":", 2)
+            if len(parts) == 3 and parts[1] in {"observation", "dialogue"}:
+                identifiers.append(stable_id(f"{parts[1]}:{parts[0]}:{parts[2]}"))
+        if self.graph is not None:
+            try:
+                response["graph"] = (
+                    GraphExplorer(self.graph, self.metadata)
+                    .explore(
+                        GraphRequest(
+                            scene_ids=[s.scene_id for s in scenes],
+                            collection_id=collection_id,
+                            evidence_ids=identifiers,
+                            max_nodes=300,
+                            max_edges=500,
+                        )
+                    )
+                    .model_dump()
+                )
+                response["retrieval"]["graph_used"] = True
+            except SearchyError:
+                response["warnings"].append(
+                    "Graph expansion is unavailable; this answer uses scene evidence only."
+                )
         if any(not item["verified"] for item in response["evidence"]):
             response["warnings"].append(
-                "Scene descriptions are unverified machine captions, so the answer describes "
-                "what the indexed evidence says rather than confirmed frames"
+                "Some evidence comes from unverified machine captions or unattributed subtitles."
             )
-        if any(item["missing_terms"] for item in context):
+        if any("infer" in item["timestamp_basis"] for item in blocks):
+            response["warnings"].append("Episode timestamps are inferred from the original chunks.")
+        missing = sorted({m for b in blocks for m in b["missing_terms"]})
+        if missing:
             response["warnings"].append(
-                "The indexed evidence does not verify every detail of this query"
+                "Not every requested detail is supported: " + ", ".join(missing)
             )
-        if any("infer" in item["timestamp_basis"].lower() for item in context):
-            response["warnings"].append(
-                "Timestamps are inferred from the original 60-second chunks"
-            )
+        response["constraints"] = [
+            {
+                "label": "All requested details in one scene",
+                "supported": any(not b["missing_terms"] and "role" not in b for b in blocks),
+                "detail": "Check the supporting evidence and its time interval.",
+            }
+        ]
+        graph = response["graph"]
 
-        try:
-            generated = self.provider.generate(
-                build_prompt(query, self._plan_payload(plan), context, response["evidence"])
-            )
-            answer, used = self._verify(generated, context)
-            if not answer:
-                response["warnings"].append(
-                    "The AI provider found insufficient evidence to answer this question"
+        def selected_graph():
+            selected_ids = set()
+            for item in response["evidence"]:
+                parts = item["evidence_id"].rsplit(":", 2)
+                if len(parts) == 3:
+                    kind = "Observation" if parts[1] == "observation" else "Dialogue"
+                    selected_ids.add(f"{kind}:" + stable_id(f"{parts[1]}:{parts[0]}:{parts[2]}"))
+            details = [edge for edge in graph["edges"] if edge["source"] in selected_ids]
+            entity_ids = {e["target"] for e in details}
+            edges = [
+                e
+                for e in graph["edges"]
+                if e["type"] == "PART_OF"
+                or e["source"] in selected_ids
+                or e["target"] in selected_ids
+                or (
+                    e["type"] in {"APPEARS_IN", "CONTAINS", "OCCURS_AT"}
+                    and (e["source"] in entity_ids or e["target"] in entity_ids)
                 )
-                return response
-            response.update(
-                status="generated",
-                answer=answer,
-                markdown=answer,
-                claims=[
+            ]
+            node_ids = {n for e in edges for n in (e["source"], e["target"])}
+            nodes = [n for n in graph["nodes"] if n["id"] in node_ids or n["type"] == "Scene"]
+            return {**graph, "nodes": nodes, "edges": edges}
+
+        def compact_graph(selected):
+            return {
+                "nodes": [
                     {
-                        "text": answer,
-                        "scene_ids": used,
-                        "evidence_ids": [
-                            item["evidence_id"]
-                            for item in response["evidence"]
-                            if item["scene_id"] in used
-                        ][:MAX_CITED_SCENES],
+                        "id": n["id"],
+                        "type": n["type"],
+                        "label": n["label"][:220],
+                        "scene_ids": n["scene_ids"],
+                        "properties": {
+                            k: v
+                            for k, v in n["properties"].items()
+                            if k
+                            in {
+                                "kind",
+                                "subject",
+                                "subject_id",
+                                "character_id",
+                                "speaker_id",
+                                "start",
+                                "end",
+                                "verified",
+                                "confidence",
+                            }
+                        },
                     }
+                    for n in selected["nodes"]
                 ],
-                citations=self._citations(scenes, used),
-                provider=self.settings.llm_provider,
-                model=self.settings.llm_model_id,
-            )
-        except SearchyError as exc:
-            response["status"] = "unavailable"
-            response["warnings"].append(str(exc))
-        response["warnings"] = list(dict.fromkeys(response["warnings"]))
-        return response
+                "edges": [
+                    {k: e[k] for k in ("source", "target", "type", "scene_ids")}
+                    for e in selected["edges"]
+                ],
+            }
 
-    @staticmethod
-    def _empty_reason(query: str, scene_ids: list[str]) -> str | None:
-        if scene_ids:
-            return None
-        return "No scenes were retrieved, so there is nothing to explain"
-
-    @staticmethod
-    def _plan_payload(plan) -> dict:
-        return {
-            "primary_type": plan.primary_type,
-            "types": list(plan.types),
-            "constraints": {
-                "characters": list(plan.characters),
-                "clothing": list(plan.clothing),
-                "dialogue": list(plan.quoted),
-                "actions": sorted(plan.action_terms),
-                "keywords": sorted(plan.content_tokens),
-            },
-            "notes": list(plan.missing_constraints),
+        context = {
+            "scenes": blocks,
+            "evidence": response["evidence"],
+            "graph": compact_graph(selected_graph()),
+            "limitations": response["warnings"],
         }
-
-    @staticmethod
-    def _constraint_report(plan, context: list[dict], requested, character_ids) -> list[dict]:
-        """Report per-constraint support so the UI can show what is proven and what is not."""
-        missing = {term for item in context for term in item["missing_terms"]}
-        report = []
-
-        def add(label: str, supported: bool, detail: str):
-            report.append(
-                {
-                    "label": label,
-                    "supported": supported,
-                    "detail": detail
-                    if supported
-                    else "not confirmed by the indexed evidence",
-                }
-            )
-
-        if requested:
-            add(
-                f"Character {' + '.join(requested)} appears",
-                True,
-                f"every returned scene lists {' + '.join(requested)}",
-            )
-        if character_ids:
-            add(
-                "Registered identity filter",
-                True,
-                f"{len(character_ids)} character identifier(s) matched",
-            )
-        if plan.clothing:
-            add(
-                f"Clothing: {' / '.join(plan.clothing)}",
-                "clothing" not in missing,
-                "the outfit is named in the scene observations",
-            )
-        if plan.quoted:
-            add(
-                f"Dialogue: \"{plan.quoted[0]}\"",
-                "dialogue" not in missing,
-                "the line appears in the scene transcript",
-            )
-        if plan.action_terms:
-            add(
-                f"Action: {' / '.join(sorted(plan.action_terms))}",
-                "character action association" not in missing,
-                "an observation attributes the action to the character",
-            )
-        if "character dialogue association" in missing:
-            add(
-                "Speaker identity",
-                False,
-                "the matching speech has no supported speaker identity",
-            )
-        if not report:
-            add(
-                "Keyword match",
-                True,
-                f"{len(context)} scene(s) contain the query terms",
-            )
-        return report
-
-    def _graph_context(self, scene_ids: list[str], collection_id: str | None) -> list[dict]:
-        if self.graph is None or not scene_ids:
-            return []
-        try:
-            found = self.graph.context(scene_ids, collection_id)
-        except SearchyError:
-            return []
-        rows = []
-        for scene_id, item in found.items():
-            rows.append({"scene_id": scene_id, **item})
-        return rows
-
-    @staticmethod
-    def _verify(generated, context: list[dict]) -> tuple[str, list[str]]:
-        """Keep only an answer whose scene references really exist and match the prose.
-
-        Returns the answer plus the ordered scene ids it may cite. Raises when the
-        provider produced something unusable rather than silently publishing it.
-        """
-        accepted = [item["scene_id"] for item in context]
-        text = " ".join(generated.answer.split())
-        cited = [scene_id for scene_id in generated.scene_ids if scene_id in accepted]
-        if not text or len(text) > 900:
-            return "", []
-        if re.search(
-            r"[<>\[\]]|(?:https?|javascript|data):|\b\d{1,2}:\d{2}\b|!\[|#{1,6}\s", text, re.I
-        ):
+        while len(json.dumps(context)) > MAX_CONTEXT_CHARS and len(response["evidence"]) > 1:
+            response["evidence"].pop()
+            context["graph"] = compact_graph(selected_graph())
+        response["graph"] = selected_graph()
+        if len(json.dumps(context)) > MAX_CONTEXT_CHARS:
             raise SearchyError(
-                "AI explanations are unavailable: provider returned links or formatting"
+                "The selected evidence exceeds the answer context budget; select fewer scenes", 422
             )
-        if not cited:
-            return "", []
-        cited = list(dict.fromkeys(cited))[:MAX_CITED_SCENES]
-        return text, cited
+        response["retrieval"]["context_characters"] = len(json.dumps(context))
+        return response, context, scenes
+
+    def _select_evidence(self, scene, query, character_ids):
+        evidence = self._evidence(scene, character_ids, query)
+        terms = normalized_terms(query)
+        evidence.sort(
+            key=lambda e: (len(terms & normalized_terms(e["text"])), e["verified"]), reverse=True
+        )
+        plan = understand(query, [])
+        if plan.narrative or plan.temporal or plan.dialogue_intent:
+            descriptions = [e for e in evidence if e["kind"] == "description"][:1]
+            dialogue = [e for e in evidence if e["kind"] == "dialogue"][:3]
+            other = [e for e in evidence if e["kind"] not in {"description", "dialogue"}]
+            return (descriptions + dialogue + other)[:5]
+        return evidence[:5]
+
+    async def stream(
+        self,
+        query: str,
+        scene_ids: list[str],
+        collection_id=None,
+        character_ids=None,
+        search_id=None,
+    ):
+        sessions = SearchSessions(self.metadata) if search_id else None
+        if sessions:
+            saved = await anyio.to_thread.run_sync(sessions.get, search_id)
+            req = saved["request"]
+            ranked = [s["scene_id"] for s in saved["response"]["results"]]
+            if (
+                req["query"] != query
+                or req.get("collection_id") != collection_id
+                or req.get("character_ids", []) != (character_ids or [])
+                or scene_ids != ranked[:12]
+            ):
+                raise InvalidInput("The answer request does not match its search session")
+            if saved["answer"] and saved["answer"]["status"] == "generated":
+                yield "answer", saved["answer"]
+                return
+        response, context, scenes = await anyio.to_thread.run_sync(
+            self._prepare, query, scene_ids, collection_id, character_ids
+        )
+        response["search_id"] = search_id
+        if not context:
+            yield "answer", response
+            return
+        evidence = {e["evidence_id"]: e for e in response["evidence"]}
+        plan = understand(query, self.search.requested_characters(query, collection_id))
+        prompt = build_prompt(
+            query,
+            {
+                "primary_type": plan.primary_type,
+                "types": plan.types,
+                "characters": plan.characters,
+                "temporal": plan.temporal,
+                "narrative": plan.narrative,
+            },
+            context,
+        )
+        try:
+            yield "status", {"state": "generating"}
+            async for claim in self.provider.stream(prompt):
+                selected = self._supported_sources(claim, evidence)
+                if not selected:
+                    response["warnings"].append("An unsupported AI statement was omitted.")
+                    continue
+                if any(e["scene_id"] not in claim.scene_ids for e in selected):
+                    continue
+                if not any(e["verified"] for e in selected) and not re.search(
+                    r"caption|description|indexed|unverified|suggest|uncertain|transcript",
+                    claim.text,
+                    re.I,
+                ):
+                    claim = claim.model_copy(
+                        update={"text": "According to the indexed evidence, " + claim.text}
+                    )
+                yield "status", {"state": "verifying"}
+                if not await self.provider.verify(
+                    claim, selected, self._claim_graph(claim, context["graph"])
+                ):
+                    response["warnings"].append(
+                        "An AI statement did not pass evidence verification and was omitted."
+                    )
+                    continue
+                record = {
+                    "text": claim.text,
+                    "scene_ids": list(dict.fromkeys(claim.scene_ids)),
+                    "evidence_ids": [s.evidence_id for s in claim.support],
+                }
+                response["claims"].append(record)
+                used = list(dict.fromkeys(s for c in response["claims"] for s in c["scene_ids"]))
+                response["citations"] = self._citations(scenes, used, evidence, response["claims"])
+                response["answer"] = " ".join(c["text"] for c in response["claims"])
+                response["markdown"] = response["answer"]
+                response["status"] = "generated"
+                response["provider"], response["model"] = (
+                    self.settings.llm_provider,
+                    self.settings.llm_model_id,
+                )
+                yield (
+                    "delta",
+                    {
+                        "text": response["answer"],
+                        "claims": response["claims"],
+                        "citations": response["citations"],
+                    },
+                )
+        except SearchyError as exc:
+            response["warnings"].append(str(exc))
+            if not response["claims"]:
+                response["status"] = "unavailable"
+        response["warnings"] = list(dict.fromkeys(response["warnings"]))
+        if sessions and response["status"] == "generated":
+            await anyio.to_thread.run_sync(sessions.save_answer, search_id, response)
+        yield "answer", response
 
     @staticmethod
-    def _citations(scenes, used: list[str]) -> list[dict]:
+    def _claim_graph(claim, graph):
+        identifiers = set()
+        for support in claim.support:
+            parts = support.evidence_id.rsplit(":", 2)
+            if len(parts) == 3:
+                kind = "Observation" if parts[1] == "observation" else "Dialogue"
+                identifiers.add(f"{kind}:" + stable_id(f"{parts[1]}:{parts[0]}:{parts[2]}"))
+        edges = [
+            e
+            for e in graph["edges"]
+            if (e["source"] in identifiers or e["target"] in identifiers)
+            and set(e["scene_ids"]) & set(claim.scene_ids)
+        ]
+        nodes = {i for e in edges for i in (e["source"], e["target"])}
+        return {"nodes": [n for n in graph["nodes"] if n["id"] in nodes], "edges": edges}
+
+    @staticmethod
+    def _supported_sources(claim, evidence):
+        if re.search(
+            r"[<>\[\]`]|\*\*|#{1,6}\s|(?:https?|javascript|data):|\b\d{1,2}:\d{2}\b",
+            claim.text,
+            re.I,
+        ):
+            return []
+        selected = []
+        for support in claim.support:
+            item = evidence.get(support.evidence_id)
+            if item is None or item["scene_id"] not in claim.scene_ids:
+                return []
+            if " ".join(support.quote.casefold().split()) not in " ".join(
+                item["text"].casefold().split()
+            ):
+                return []
+            selected.append(item)
+        if {e["scene_id"] for e in selected} != set(claim.scene_ids):
+            return []
+        return selected
+
+    @staticmethod
+    def _citations(scenes, used, evidence, claims):
         citations = []
         for scene in scenes:
             if scene.scene_id not in used:
                 continue
+            pieces = [
+                evidence[i]
+                for c in claims
+                for i in c["evidence_ids"]
+                if evidence[i]["scene_id"] == scene.scene_id
+            ]
+            times = [e["start"] for e in pieces if e["start"] is not None]
+            start = min(times) if times else scene.start
+            if start is not None and scene.start is not None:
+                start = max(scene.start, min(start, scene.end if scene.end is not None else start))
             citations.append(
                 {
                     "scene_id": scene.scene_id,
                     "label": f"Scene {len(citations) + 1}",
                     "episode_id": scene.episode_id,
-                    "start": scene.start,
+                    "start": start,
                     "end": scene.end,
                     "timestamp_basis": scene.timestamp_basis,
                     "available": bool(scene.media and Path(scene.media.path).is_file()),
                     "url": f"/scenes/{scene.scene_id}",
+                    "evidence_ids": list(dict.fromkeys(e["evidence_id"] for e in pieces)),
                 }
             )
         return citations
@@ -344,7 +491,9 @@ class AnswerService:
         if (
             plan.dialogue_intent
             and requested
-            and not all(speaker_matches(scene, name, list(plan.quoted), target) for name in requested)
+            and not all(
+                speaker_matches(scene, name, list(plan.quoted), target) for name in requested
+            )
         ):
             missing.append("character dialogue association")
         if (
@@ -372,10 +521,40 @@ class AnswerService:
             )
         ):
             missing.append("character dialogue association")
+        if re.search(r"\b(while|simultaneously)\b|at the same time", query, re.I) and plan.clothing:
+            outfits = [
+                o
+                for o in scene.observations
+                if o.kind == "clothing"
+                and normalized_terms(o.value) & normalized_terms(" ".join(plan.clothing))
+            ]
+            actions = [
+                o
+                for o in scene.observations
+                if o.kind in {"action", "interaction"}
+                and plan.action_terms
+                and plan.action_terms <= normalized_terms(o.value)
+            ]
+            timed_outfits = [o for o in outfits if o.start is not None and o.end is not None]
+            timed_actions = [o for o in actions if o.start is not None and o.end is not None]
+            if (
+                outfits
+                and actions
+                and len(timed_outfits) == len(outfits)
+                and len(timed_actions) == len(actions)
+            ):
+                if not any(
+                    max(a.start, b.start) < min(a.end, b.end)
+                    for a in timed_outfits
+                    for b in timed_actions
+                ):
+                    return None
+            else:
+                missing.append("simultaneous timing unverified")
         return list(dict.fromkeys(missing))
 
     @staticmethod
-    def _evidence(scene, character_ids: list[str] | None = None) -> list[dict]:
+    def _evidence(scene, character_ids: list[str] | None = None, query: str = "") -> list[dict]:
         items = []
         selected = set(character_ids or [])
         if scene.description.strip():
@@ -409,6 +588,10 @@ class AnswerService:
         observations.sort(
             key=lambda item: (
                 bool(selected) and item[2] not in selected,
+                -len(
+                    normalized_terms(query)
+                    & normalized_terms(item[1].value + " " + item[1].evidence)
+                ),
                 not item[1].provenance.verified,
                 item[0],
             )
@@ -443,6 +626,7 @@ class AnswerService:
         dialogue.sort(
             key=lambda item: (
                 bool(selected) and item[2] not in selected,
+                -len(normalized_terms(query) & normalized_terms(item[1].text)),
                 not bool(item[1].provenance and item[1].provenance.verified),
                 item[0],
             )
@@ -467,14 +651,5 @@ class AnswerService:
         return items
 
 
-_CAPTION_NOISE = re.compile(r"#{1,6}\s*|\*\*|__|`{1,3}")
-
-
 def clean_caption(text: str) -> str:
-    """Strip caption markdown so the model reads plain sentences, not headings."""
-    flattened = _CAPTION_NOISE.sub("", text)
-    lines = [line.strip(" -*\t") for line in flattened.splitlines()]
-    return " ".join(line for line in lines if line)
-
-
-__all__ = ["AnswerService", "clean_caption"]
+    return " ".join(re.sub(r"#{1,6}\s*|\*\*|__|`{1,3}", "", text).split())

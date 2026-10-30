@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from searchy.api.answers import create_answers_router
+from searchy.api.answers import SearchSessionResponse, create_answers_router
 from searchy.api.catalog import create_catalog_router
 from searchy.api.characters import create_character_router
 from searchy.api.exploration import create_exploration_router
@@ -253,7 +253,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise InvalidInput(
                 "Enable VISUAL_ENABLED and index scenes with frames to use visual search"
             )
-        return svc.search.search(**body.model_dump(exclude_none=True))
+        from searchy.retrieval.understanding import understand
+
+        request = body.model_dump(exclude_none=True)
+        result = svc.search.search(**request)
+        plan = understand(
+            body.query, svc.search.requested_characters(body.query, body.collection_id)
+        )
+        result["query_plan"] = {"primary_type": plan.primary_type, "types": list(plan.types)}
+        svc.sessions.create(request, result)
+        return result
+
+    @application.get(
+        "/api/search/sessions/{search_id}", response_model=SearchSessionResponse, dependencies=api
+    )
+    def search_session(search_id: str, svc=Depends(services)):
+        return svc.sessions.get(search_id)
 
     def find_scene(scene_id, svc):
         scene = svc.metadata.get_scene(scene_id)
