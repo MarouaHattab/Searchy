@@ -161,6 +161,29 @@ ORDER BY s.scene_id
 LIMIT $limit
 """
 
+_CONTEXT = """
+// searchy_context
+UNWIND $scenes AS requested
+MATCH (s:Scene {scene_id: requested})
+WHERE ($collection_id IS NULL OR s.collection_id = $collection_id)
+CALL (s) {
+    MATCH (s)-[:HAS_OBSERVATION]->(:Observation)-[link:DESCRIBES|SUBJECT]->(e)
+    WHERE e.name IS NOT NULL
+    RETURN collect(DISTINCT {kind: head(labels(e)), name: e.name, link: type(link)}) AS entities
+}
+CALL (s) {
+    MATCH (c:Character)-[:APPEARS_IN]->(s)
+    RETURN collect(DISTINCT c.name) AS appearing
+}
+CALL (s) {
+    MATCH (s)-[:HAS_DIALOGUE]->(:Dialogue)-[:SPOKEN_BY]->(c:Character)
+    RETURN collect(DISTINCT c.name) AS speaking
+}
+RETURN s.scene_id AS scene_id,
+    entities,
+    appearing + speaking AS characters
+"""
+
 _ENTITY_QUERIES = {
     ObservationKind.CLOTHING: _CLOTHING,
     ObservationKind.ACTION: _ACTION,
@@ -445,6 +468,46 @@ class GraphStore:
         except Exception:
             raise SearchyError(
                 "Neo4j search failed. Check the database connection and schema"
+            ) from None
+
+    def context(self, scene_ids: list[str], collection_id: str | None = None) -> dict[str, dict]:
+        """Return the graph entities attached to each scene, for answer context.
+
+        Read-only. The caller is responsible for deciding whether the result proves
+        anything; this only reports which entity nodes the scene is linked to.
+        """
+        if not scene_ids:
+            return {}
+
+        seen_kinds = ("Character", "Clothing", "Action", "Object", "Location")
+
+        def read(tx):
+            records = tx.run(
+                _CONTEXT, scenes=scene_ids[:24], collection_id=collection_id
+            )
+            context = {}
+            for record in records:
+                entities: dict[str, list[str]] = {kind: [] for kind in seen_kinds}
+                for item in record["entities"]:
+                    if not item["name"] or item["kind"] not in entities:
+                        continue
+                    names = entities[item["kind"]]
+                    if item["name"] not in names and len(names) < 6:
+                        names.append(item["name"])
+                context[record["scene_id"]] = {
+                    "entities": {kind: names for kind, names in entities.items() if names},
+                    "characters": sorted(set(record["characters"])),
+                }
+            return context
+
+        try:
+            with self._connection().session(database=self.settings.neo4j_database) as session:
+                return session.execute_read(read)
+        except SearchyError:
+            raise
+        except Exception:
+            raise SearchyError(
+                "Neo4j context lookup failed. Check the database connection and schema"
             ) from None
 
     def delete_scenes(self, scene_ids: list[str]) -> None:
