@@ -1,8 +1,8 @@
 # Searchy
 
-Searchy indexes video scenes and searches their dialogue, visual descriptions, and scene-scoped knowledge. Results include source timestamps, matching evidence, provenance, and playback availability.
+Searchy makes a video collection searchable by dialogue, characters, visual descriptions, and scene-scoped knowledge. Its React workspace brings together natural-language search, video playback, a searchable library, character references, and processing activity. Results include source timestamps, matching evidence, provenance, and playback availability.
 
-Python **3.12** and [uv](https://docs.astral.sh/uv/) are required. No frontend is included.
+Python **3.12**, [uv](https://docs.astral.sh/uv/), Docker, and Node.js **22.12+** are supported. Frontend dependencies are pinned in `frontend/package-lock.json`; Python dependencies are pinned in `uv.lock`.
 
 ## Run locally
 
@@ -25,6 +25,20 @@ uv run --extra models --extra video python -m searchy.worker
 
 The API starts with base `uv sync` dependencies using `uv run uvicorn searchy.main:app --reload`. Model and video extras are loaded only when their features are used. Include the extras on subsequent `uv run` commands to keep them installed. The worker also accepts `--once`. Open [API docs](http://127.0.0.1:8000/docs), [Neo4j Browser](http://localhost:7474), or [Qdrant dashboard](http://localhost:6333/dashboard).
 
+Start the frontend in another terminal:
+
+```powershell
+cd frontend
+npm ci
+npm run dev
+```
+
+Open [Searchy](http://127.0.0.1:5173). Vite forwards API, readiness, thumbnails, subtitles, and media requests to `http://127.0.0.1:8000`. Keep the API running. For a production build, run `npm run build`; `npm run preview` serves that build locally at port 4173 with the same API proxy. A deployed frontend needs an equivalent reverse proxy and SPA routing fallback.
+
+The optional `frontend/.env.example` documents `VITE_API_URL` for a separately hosted API. Leave it empty for the local proxy. Backend `CORS_ORIGINS` accepts a JSON array and defaults to the two localhost origins on port 5173. Add other origins explicitly when using a direct API URL. Never put provider credentials in `VITE_` variables. The browser app uses the trusted local workspace with the optional backend `API_KEY` unset.
+
+The workspace includes real collection metrics, collection/character search filters, evidence-based result cards, paginated video and character browsing, scene transcripts, cached source thumbnails, and a player that seeks using file-relative offsets. Uploads show actual transfer progress, then link to durable processing jobs; retries create a new job. Settings shows live database health and provider configuration without exposing secrets. Desktop navigation collapses, mobile navigation supports keyboard focus, and light/dark preferences stay in the browser.
+
 Install [FFmpeg and FFprobe](https://ffmpeg.org/download.html), or set `FFMPEG_PATH` and `FFPROBE_PATH` to their executables. Uploaded videos require the `video` and `models` extras, FFmpeg, and a configured vision provider. Existing metadata imports need embeddings and databases; they do not call a VLM or Whisper. Docker uses isolated named volumes and localhost ports. Stop with `docker compose down`; omit `-v` to preserve data.
 
 ## Configuration
@@ -35,7 +49,7 @@ Copy `.env.example` only once and keep `.env` private. Settings are read from th
 - Qdrant: configure URL, optional API key, and collection name. Named vectors encode model identity; incompatible model, dimension, distance, or visual configurations are rejected. Use a **new collection name and reimport** when changing models or enabling visual vectors. SQLite tracks which target/model configuration was indexed.
 - Text: `LOCAL_EMBEDDING` uses Sentence Transformers. The default `google/embeddinggemma-300m` requires [accepted Hugging Face access terms](https://huggingface.co/google/embeddinggemma-300m) and an authorized `HF_TOKEN` or cached Hugging Face login. It runs in float32 and uses query/document prompts. A smaller ungated option is `sentence-transformers/all-MiniLM-L6-v2`; select it explicitly with a fresh collection.
 - Hugging Face: models cache under `MODEL_CACHE_DIR`. `HF_HUB_ENABLE_HF_TRANSFER` is accepted for compatibility but ignored by modern Hub releases, which [use Xet](https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables). Searchy does not install obsolete `hf-transfer`.
-- Vision: choose `GOOGLE_GENAI` with `GEMINI_API_KEY`, or `GROQ` with `GROQ_API_KEY` and a currently available **vision-capable** `LLM_MODEL_ID`. Provider adapters share validated extraction contracts, bounded retries, and sanitized errors. Supplying dialogue does not establish speaker identity.
+- Vision: choose `GOOGLE_GENAI` with `GEMINI_API_KEY` and `LLM_MODEL_ID=gemini-3.5-flash-lite`, or `GROQ` with `GROQ_API_KEY` and a currently available **vision-capable** `LLM_MODEL_ID`. [Gemini 3.5 Flash-Lite](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite) supports image inputs and structured output. Provider adapters share validated extraction contracts, bounded retries, and sanitized errors. Supplying dialogue does not establish speaker identity. Searchy enforces observation limits locally when a provider cannot accept that schema constraint.
 - `VLM_MAX_IMAGES` limits total evidence and reference images per request (defaults: Gemini 10, Groq 3). References use remaining slots after evidence frames. Set this to your selected model's documented image limit; fewer reference slots mean fewer identifiable characters.
 - `VISUAL_ENABLED=true` enables CLIP frame vectors and text-to-image retrieval with `VISUAL_MODEL_ID`. Scenes without actual frames have no visual vector.
 - `CHARACTER_REFERENCE_DIR` may contain named PNG reference images. Without usable references, uploaded video people remain unidentified. These are VLM-assisted observations, not face recognition or guaranteed identification.
@@ -69,11 +83,13 @@ Imports support an optional `subpath` restricted to `IMPORT_ROOT`, a scene `limi
 
 Other endpoints: `GET /api/jobs`, `/api/collections`, `/api/videos`, `/api/videos/{id}/scenes`, `/api/scenes/{id}`, and `/api/scenes/{id}/media`. Lists have bounded pagination. Search supports `hybrid`, `text`, `graph`, or `visual` mode, collection filters and explicit character filters. A successful `/ready` checks database availability and existing vector compatibility; it does not prove model downloads or vision-provider access.
 
+Frontend catalog endpoints: `GET /api/workspace`, `/api/library?q=&collection_id=&limit=&offset=`, `/api/videos/{id}`, `/api/characters`, `/api/characters/{id}/reference`, and `/api/characters/{id}/scenes`. `GET /api/scenes/{id}/thumbnail` returns a real cached frame; `/api/scenes/{id}/subtitles.vtt` maps stored dialogue onto the served media timeline. Imported subtitle alignment remains approximate because clip origins are inferred. A reference image identifies the reference label; it does not independently confirm that label in every scene.
+
 ## Architecture
 
 ```text
 src/searchy/
-  api/         request and response contracts
+  api/         request/response contracts and catalog routes
   core/        validated settings and safe service errors
   ingestion/   processed caption/subtitle/clip import
   processing/  FFprobe, shots, Whisper, frame sampling, extraction caches
@@ -81,10 +97,24 @@ src/searchy/
   graph/       constrained Neo4j writes and parameterized retrieval
   retrieval/   candidate fusion, evidence filters, deterministic reranking
   storage/     SQLite metadata/jobs and Qdrant vectors
-  services/    application dependencies
+  services/    catalog summaries, media assets, application dependencies
   main.py      FastAPI application
   worker.py    durable ingestion worker
 ```
+
+```text
+frontend/src/
+  app/         routing and responsive workspace shell
+  components/  shared controls and scene cards
+  features/    search, upload, and scene player
+  pages/       dashboard, library, characters, jobs, settings
+  services/    typed HTTP client and shared query options
+  lib/         formatting utilities
+  styles/      design tokens and responsive component styles
+  types.ts     API domain contracts
+```
+
+React Router loads pages on demand. TanStack Query owns server state, polling, cancellation and cache refresh. Requests have bounded timeouts, and search state stays in the URL. API errors, missing source files, unknown timestamps, and unverified identity remain explicit. No user accounts, billing, or editable server configuration are implied by the interface.
 
 Both ingestion modes produce the same validated `Video`, `Scene`, `Dialogue`, `Observation`, and provenance records. Neo4j observations belong to a scene and optionally a precise evidence interval. Explicit subject links carry clothing/actions; co-occurrence never establishes who spoke or wore something. Reindexing replaces scene facts idempotently. Queries use fixed parameterized Cypher and never change indexed knowledge.
 
@@ -100,6 +130,9 @@ uv run ruff check src
 uv run ruff format --check src
 # Local development tests are deliberately ignored, per project policy:
 uv run --extra models --extra video pytest .local-tests --basetemp .local-tests/tmp
+cd frontend
+npm run typecheck
+npm run build
 ```
 
 The lock includes base, optional and development dependency groups. PyAV is constrained below 19 for the installed faster-whisper release's audio decoding API. Model weights, media, local tests, caches, generated outputs, database files and `.env` are excluded from Git. A fresh checkout includes no test data or private test scripts. Provider schema/transport tests do not constitute live Gemini/Groq verification; actual API access requires your keys and model availability.

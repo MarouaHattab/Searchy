@@ -19,3 +19,5 @@ dist/
 *.sqlite*
 .coverage
 htmlcov/
+node_modules/
+*.tsbuildinfo
