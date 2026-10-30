@@ -123,7 +123,7 @@ class VectorStore:
             info = self.client.get_collection(self.settings.qdrant_collection_name)
             self._validate_collection(info, dimensions)
             if not self._indexes_created:
-                for field in ("scene_id", "collection_id"):
+                for field in ("scene_id", "collection_id", "character_ids"):
                     if field not in info.payload_schema:
                         self.client.create_payload_index(
                             collection_name=self.settings.qdrant_collection_name,
@@ -221,6 +221,7 @@ class VectorStore:
                                 "scene_id": scene.scene_id,
                                 "video_id": scene.video_id,
                                 "collection_id": scene.collection_id,
+                                "character_ids": scene.character_ids,
                                 "episode_id": scene.episode_id,
                                 "start": scene.start,
                                 "end": scene.end,
@@ -247,7 +248,12 @@ class VectorStore:
             ) from None
 
     def search(
-        self, query: str, collection_id: str | None, limit: int, visual: bool = False
+        self,
+        query: str,
+        collection_id: str | None,
+        limit: int,
+        visual: bool = False,
+        character_ids: list[str] | None = None,
     ) -> list[Candidate]:
         if visual and not self._visual_enabled:
             return []
@@ -259,17 +265,20 @@ class VectorStore:
             vector_name = self.visual_vector_name if visual else self.text_vector_name
             vector = provider.embed_query(query)
             self._validate_vectors([vector], 1, self._dimensions[vector_name])
-            query_filter = (
-                models.Filter(
-                    must=[
-                        models.FieldCondition(
-                            key="collection_id", match=models.MatchValue(value=collection_id)
-                        )
-                    ]
+            conditions = []
+            if collection_id is not None:
+                conditions.append(
+                    models.FieldCondition(
+                        key="collection_id", match=models.MatchValue(value=collection_id)
+                    )
                 )
-                if collection_id is not None
-                else None
+            conditions.extend(
+                models.FieldCondition(
+                    key="character_ids", match=models.MatchValue(value=identifier)
+                )
+                for identifier in character_ids or []
             )
+            query_filter = models.Filter(must=conditions) if conditions else None
             candidates = []
             seen = set()
             offset = 0

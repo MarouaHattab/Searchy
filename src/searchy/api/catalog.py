@@ -57,7 +57,7 @@ def create_catalog_router(settings: Settings, services, authorize) -> APIRouter:
         path = catalog.reference(character_id)
         if path is None:
             raise HTTPException(404, "No character reference image is available")
-        return FileResponse(path, media_type="image/png")
+        return FileResponse(path)
 
     @router.get("/characters/{character_id}/scenes", response_model=list[SceneDetail])
     def character_scenes(

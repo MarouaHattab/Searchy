@@ -7,7 +7,7 @@ from uuid import uuid4
 
 from searchy.core.config import Settings
 from searchy.core.errors import SearchyError
-from searchy.domain import Provenance, Scene, Video, stable_id
+from searchy.domain import Observation, ObservationKind, Provenance, Scene, Video, stable_id
 from searchy.ingestion.importer import import_chunks
 from searchy.processing.video import VideoProcessor
 from searchy.services.container import Services
@@ -49,6 +49,178 @@ class Worker:
                 )
             )
         return scenes
+
+    def preserve_registered_evidence(self, scene: Scene, previous: Scene | None) -> Scene:
+        if (
+            previous is None
+            or scene.start is None
+            or any(
+                getattr(previous, field) != getattr(scene, field)
+                for field in (
+                    "scene_id",
+                    "video_id",
+                    "collection_id",
+                    "episode_id",
+                    "source_chunk",
+                    "start",
+                    "end",
+                )
+            )
+        ):
+            return scene
+        scene = scene.model_copy(deep=True)
+        frame_keys = {(str(Path(frame.path).resolve()), frame.timestamp) for frame in scene.frames}
+        for frame in previous.frames:
+            path = Path(frame.path)
+            key = (str(path.resolve()), frame.timestamp)
+            if (
+                key not in frame_keys
+                and scene.start <= frame.timestamp <= scene.end
+                and not path.is_symlink()
+                and path.is_file()
+                and path.stat().st_size > 0
+            ):
+                scene.frames.append(frame.model_copy())
+                frame_keys.add(key)
+        characters = getattr(self.services, "characters", None)
+        registry = getattr(characters, "store", None)
+        if registry is None:
+            return scene
+        registered = {
+            character["id"]: character
+            for character in registry.list(scene.collection_id, scene.video_id)
+        }
+
+        def evidence_key(observation: Observation) -> tuple:
+            return (
+                observation.kind,
+                None if observation.kind == ObservationKind.CHARACTER else observation.value,
+                observation.evidence,
+                observation.start,
+                observation.end,
+                observation.provenance.source,
+                observation.provenance.method,
+                observation.provenance.model,
+            )
+
+        recognition_methods = {
+            "sface_reference_comparison",
+            "vlm_reference_comparison",
+            "human_reviewed_character_match",
+        }
+        recognition = getattr(self.services, "recognition", None)
+        recorded_matches: dict[str, list[dict]] = {}
+
+        def valid_recognition(observation: Observation) -> bool:
+            if recognition is None:
+                return True
+            identifier = observation.character_id
+            if identifier not in registered:
+                return False
+            if identifier not in recorded_matches:
+                recorded_matches[identifier] = recognition._rows(
+                    identifier, scene.scene_id, registered[identifier]["revision"]
+                )
+            for match in recorded_matches[identifier]:
+                reviewed = observation.provenance.method == "human_reviewed_character_match"
+                if (
+                    match["timestamp"] != observation.start
+                    or match["evidence"] != observation.evidence
+                    or match["model_id"] != observation.provenance.model
+                    or (reviewed and match["status"] != "accepted")
+                    or (
+                        not reviewed
+                        and (
+                            match["status"] != "pending"
+                            or not match["qualified"]
+                            or match["method"] != observation.provenance.method
+                        )
+                    )
+                ):
+                    continue
+                try:
+                    if (
+                        recognition.frame_path(identifier, match["id"]).resolve()
+                        == Path(observation.provenance.source).resolve()
+                    ):
+                        return True
+                except SearchyError:
+                    continue
+            return False
+
+        for observation in previous.observations:
+            identifiers = {
+                identifier
+                for identifier in (observation.character_id, observation.subject_id)
+                if identifier
+            }
+            if not identifiers or not identifiers.issubset(registered):
+                continue
+            source = Path(observation.provenance.source)
+            frame_valid = (
+                observation.start is not None
+                and any(
+                    path == str(source.resolve())
+                    and observation.start <= timestamp <= observation.end
+                    for path, timestamp in frame_keys
+                )
+                and source.is_file()
+                and not source.is_symlink()
+                and source.stat().st_size > 0
+            )
+            if (
+                observation.provenance.method in recognition_methods | {"sampled_frame_vlm"}
+                and not frame_valid
+            ):
+                continue
+            if observation.provenance.method in recognition_methods and not valid_recognition(
+                observation
+            ):
+                continue
+            candidates = [
+                item
+                for item in scene.observations
+                if evidence_key(item) == evidence_key(observation)
+            ]
+            if len(candidates) == 1 and observation.provenance.method not in recognition_methods:
+                target = candidates[0]
+                if any(
+                    getattr(target, field) not in {None, getattr(observation, field)}
+                    for field in ("character_id", "subject_id")
+                    if getattr(observation, field)
+                ):
+                    continue
+                for field, label in (("character_id", "value"), ("subject_id", "subject")):
+                    identifier = getattr(observation, field)
+                    if identifier:
+                        setattr(target, field, identifier)
+                        setattr(target, label, registered[identifier]["name"])
+                if observation.provenance.verified:
+                    target.provenance = observation.provenance.model_copy()
+                continue
+            if not frame_valid:
+                continue
+            retained = observation.model_copy(deep=True)
+            if retained.character_id:
+                retained.value = registered[retained.character_id]["name"]
+            if retained.subject_id:
+                retained.subject = registered[retained.subject_id]["name"]
+            if retained not in scene.observations:
+                scene.observations.append(retained)
+        for line in scene.dialogue:
+            candidates = [
+                old
+                for old in previous.dialogue
+                if old.speaker_id in registered
+                and (old.start, old.end, old.text) == (line.start, line.end, line.text)
+            ]
+            if len(candidates) == 1 and line.speaker_id in {None, candidates[0].speaker_id}:
+                old = candidates[0]
+                line.speaker_id = old.speaker_id
+                line.speaker = registered[old.speaker_id]["name"]
+                if old.provenance and old.provenance.verified:
+                    line.provenance = old.provenance.model_copy()
+        return scene
 
     def run_once(self) -> bool:
         store = self.services.metadata
@@ -116,6 +288,17 @@ class Worker:
     def process(self, job: dict, progress) -> dict:
         svc = self.services
         payload = job["payload"]
+        if job["kind"] == "character_references":
+            progress(0.05, "validating character references")
+            return svc.characters.prepare_references(payload["character_id"], payload["revision"])
+        if job["kind"] == "character_recognition":
+            return svc.recognition.process(payload["character_id"], payload["revision"], progress)
+        if job["kind"] == "character_identity_sync":
+            character = svc.characters.store.get(payload["character_id"])
+            if character is None or character["revision"] != payload["revision"]:
+                return {"skipped": True, "reason": "Character changed"}
+            progress(0.1, "updating character identity indexes")
+            return svc.recognition.sync_identity(payload["character_id"])
         progress(0.01, "checking services")
         svc.graph.ensure_schema()
         svc.vectors.ensure_collection()
@@ -165,11 +348,14 @@ class Worker:
         graph_ids = svc.graph.indexed_scene_ids(identifiers)
         vector_ids = svc.vectors.indexed_scene_ids(identifiers)
         for scene in scenes:
+            previous = svc.metadata.get_scene(scene.scene_id)
+            if job["kind"] == "import":
+                scene = self.preserve_registered_evidence(scene, previous)
             if (
                 not payload.get("force", False)
                 and scene.scene_id in graph_ids
                 and scene.scene_id in vector_ids
-                and svc.metadata.get_scene(scene.scene_id) == scene
+                and previous == scene
                 and svc.metadata.is_indexed(scene.scene_id)
             ):
                 skipped += 1

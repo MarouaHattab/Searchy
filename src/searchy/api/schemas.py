@@ -18,6 +18,7 @@ class SearchRequest(Record):
     collection_id: str | None = Field(default=None, max_length=80)
     mode: Literal["hybrid", "text", "graph", "visual"] = "hybrid"
     characters: list[str] | None = Field(default=None, max_length=10)
+    character_ids: list[str] | None = Field(default=None, max_length=10)
 
     @field_validator("query")
     @classmethod
@@ -48,6 +49,7 @@ class SceneDetail(Record):
     observations: list[Observation]
     provenance: list[Provenance]
     characters: list[str]
+    character_ids: list[str] = Field(default_factory=list)
     playback: Playback
 
 
@@ -61,6 +63,7 @@ class SceneMatch(Record):
     timestamp_basis: str
     description: str
     matching_characters: list[str]
+    matching_character_ids: list[str] = Field(default_factory=list)
     dialogue: list[Dialogue]
     score: float
     channel_scores: dict[str, float]
@@ -136,6 +139,14 @@ class CharacterSummary(Record):
     video_count: int
     verified_scene_count: int
     identity_status: Literal["reference", "unverified", "unidentified"]
+    origin: Literal["custom", "extracted"] = "extracted"
+    collection_id: str | None = None
+    video_id: str | None = None
+    description: str = ""
+    revision: int | None = None
+    status: str | None = None
+    recognition_status: str | None = None
+    reference_count: int = 0
 
 
 class WorkspaceMetrics(Record):

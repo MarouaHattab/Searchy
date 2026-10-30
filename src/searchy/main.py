@@ -12,7 +12,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
+from searchy.api.answers import create_answers_router
 from searchy.api.catalog import create_catalog_router
+from searchy.api.characters import create_character_router
+from searchy.api.exploration import create_exploration_router
 from searchy.api.schemas import (
     ImportRequest,
     JobResponse,
@@ -46,7 +49,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.add_middleware(
         CORSMiddleware,
         allow_origins=config.cors_origins,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "X-API-Key", "Range"],
         expose_headers=[
             "Content-Range",
@@ -250,7 +253,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise InvalidInput(
                 "Enable VISUAL_ENABLED and index scenes with frames to use visual search"
             )
-        return svc.search.search(**body.model_dump())
+        return svc.search.search(**body.model_dump(exclude_none=True))
 
     def find_scene(scene_id, svc):
         scene = svc.metadata.get_scene(scene_id)
@@ -278,6 +281,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     application.include_router(create_catalog_router(config, services, authorize))
+    application.include_router(create_answers_router(config, services, authorize))
+    application.include_router(create_exploration_router(config, services, authorize))
+    application.include_router(create_character_router(config, services, authorize))
     return application
 
 

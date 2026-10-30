@@ -133,6 +133,9 @@ _SEARCH = """
 MATCH (s:Scene)
 WHERE ($collection_id IS NULL OR s.collection_id = $collection_id)
   AND all(term IN $terms WHERE term IN s.terms)
+  AND all(identifier IN $character_ids WHERE
+      EXISTS { MATCH (:Character {key: identifier})-[:APPEARS_IN]->(s) }
+      OR EXISTS { MATCH (s)-[:HAS_DIALOGUE]->(:Dialogue)-[:SPOKEN_BY]->(:Character {key: identifier}) })
 OPTIONAL MATCH (c:Character)-[:APPEARS_IN]->(s)
 WITH s, collect(DISTINCT c.normalized) AS visible_characters
 OPTIONAL MATCH (s)-[:HAS_DIALOGUE]->(:Dialogue)-[:SPOKEN_BY]->(speaker:Character)
@@ -238,10 +241,10 @@ class GraphStore:
                 "Cannot create Neo4j constraints. Check database write permissions"
             ) from None
 
-    def _character_parameters(self, scene: Scene, name: str) -> dict:
+    def _character_parameters(self, scene: Scene, name: str, identifier: str | None = None) -> dict:
         normalized = _normalized(name)
         return {
-            "key": stable_id(f"character:{scene.collection_id}:{normalized}"),
+            "key": identifier or stable_id(f"character:{scene.collection_id}:{normalized}"),
             "name": name.strip(),
             "normalized": normalized,
         }
@@ -286,6 +289,7 @@ class GraphStore:
                 "end": scene.end,
                 "timestamp_basis": scene.timestamp_basis,
                 "description": scene.description,
+                "character_ids": scene.character_ids,
                 "terms": _tokens(scene.search_text()),
                 "provenance_json": json.dumps([p.model_dump() for p in scene.provenance]),
             }
@@ -321,7 +325,9 @@ class GraphStore:
                     groups[_CHARACTER].append(
                         {
                             **identifiers,
-                            **self._character_parameters(scene, observation.value),
+                            **self._character_parameters(
+                                scene, observation.value, observation.character_id
+                            ),
                         }
                     )
                 else:
@@ -342,7 +348,9 @@ class GraphStore:
                     groups[_SUBJECT].append(
                         {
                             **identifiers,
-                            **self._character_parameters(scene, observation.subject),
+                            **self._character_parameters(
+                                scene, observation.subject, observation.subject_id
+                            ),
                         }
                     )
             for index, dialogue in enumerate(scene.dialogue):
@@ -362,7 +370,9 @@ class GraphStore:
                     groups[_SPEAKER].append(
                         {
                             "dialogue_id": dialogue_id,
-                            **self._character_parameters(scene, dialogue.speaker),
+                            **self._character_parameters(
+                                scene, dialogue.speaker, dialogue.speaker_id
+                            ),
                         }
                     )
 
@@ -390,7 +400,12 @@ class GraphStore:
             ) from None
 
     def search(
-        self, query: str, characters: list[str], collection_id: str | None, limit: int
+        self,
+        query: str,
+        characters: list[str],
+        collection_id: str | None,
+        limit: int,
+        character_ids: list[str] | None = None,
     ) -> list[Candidate]:
         names = list(dict.fromkeys(_normalized(name) for name in characters))
         name_tokens = {token for name in names for token in _tokens(name)}
@@ -399,7 +414,7 @@ class GraphStore:
             for token in _tokens(query)
             if len(token) > 1 and token not in _STOPWORDS and token not in name_tokens
         ]
-        if not terms and not names:
+        if not terms and not names and not character_ids:
             return []
 
         def read(tx):
@@ -407,6 +422,7 @@ class GraphStore:
                 _SEARCH,
                 terms=terms,
                 characters=names,
+                character_ids=character_ids or [],
                 collection_id=collection_id,
                 limit=limit,
                 score=min(1.0, 0.6 + 0.05 * (len(terms) + len(names))),

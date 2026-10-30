@@ -3,6 +3,8 @@ from searchy.domain import stable_id
 from searchy.graph.store import GraphStore
 from searchy.models.embeddings import LocalEmbeddings, VisualEmbeddings
 from searchy.retrieval.search import SearchEngine
+from searchy.services.characters import CharacterService
+from searchy.services.recognition import RecognitionService
 from searchy.storage.metadata import MetadataStore
 from searchy.storage.vectors import VectorStore
 
@@ -25,10 +27,14 @@ class Services:
             )
         )
         self.metadata = MetadataStore(settings.database_path, signature)
+        self.characters = CharacterService(settings, self.metadata)
         self.embeddings = LocalEmbeddings(settings)
         self.visual = VisualEmbeddings(settings) if settings.visual_enabled else None
         self.graph = GraphStore(settings)
         self.vectors = VectorStore(settings, self.embeddings, self.visual)
+        self.recognition = RecognitionService(
+            settings, self.metadata, self.characters, self.graph, self.vectors
+        )
         self.search = SearchEngine(settings, self.metadata, self.graph, self.vectors)
 
     def close(self):

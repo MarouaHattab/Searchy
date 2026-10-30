@@ -1,7 +1,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,6 +12,10 @@ class Settings(BaseSettings):
     import_root: Path = Path("data/episodes_splitted")
     episode_media_dir: Path | None = Path("data/episodes")
     character_reference_dir: Path | None = Path("data/meta")
+    face_detector_path: Path | None = None
+    face_recognizer_path: Path | None = None
+    face_match_threshold: float = Field(default=0.5, ge=0, le=1)
+    face_match_margin: float = Field(default=0.08, ge=0, le=1)
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"
     neo4j_password: SecretStr = SecretStr("")
@@ -51,6 +55,17 @@ class Settings(BaseSettings):
     visual_min_score: float = Field(default=0.23, ge=-1, le=1)
     api_key: SecretStr = SecretStr("")
     cors_origins: list[str] = ["http://127.0.0.1:5173", "http://localhost:5173"]
+
+    @field_validator(
+        "episode_media_dir",
+        "character_reference_dir",
+        "face_detector_path",
+        "face_recognizer_path",
+        mode="before",
+    )
+    @classmethod
+    def empty_optional_path(cls, value):
+        return None if isinstance(value, str) and not value.strip() else value
 
     @property
     def database_path(self) -> Path:

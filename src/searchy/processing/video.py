@@ -11,7 +11,7 @@ from pydantic import TypeAdapter, ValidationError
 from searchy.core.config import Settings
 from searchy.core.errors import InvalidInput, SearchyError
 from searchy.domain import Dialogue, Frame, Media, Observation, Provenance, Scene, Video, stable_id
-from searchy.models.vision import get_vision_provider
+from searchy.models.vision import get_vision_provider, registered_references
 
 
 @dataclass(frozen=True)
@@ -307,7 +307,8 @@ class VideoProcessor:
         path = path.resolve()
         progress(0.02, "validating video")
         metadata = self.probe(path)
-        provider = get_vision_provider(self.settings)
+        references = registered_references(self.settings, video)
+        provider = get_vision_provider(self.settings, references=references)
         self._run([self.settings.ffmpeg_path, "-version"], "FFmpeg", 10)
         content_hash = hashlib.sha256()
         with path.open("rb") as source:
@@ -319,15 +320,15 @@ class VideoProcessor:
         intervals = self._detect_scenes(path, metadata.duration, cache)
         progress(0.15, "transcribing speech" if metadata.has_audio else "video has no audio stream")
         dialogue = self._transcribe(path, metadata, cache)
-        reference_dir = self.settings.character_reference_dir
-        references = (
-            []
-            if reference_dir is None or not reference_dir.is_dir()
-            else [
-                (image.name, hashlib.sha256(image.read_bytes()).hexdigest())
-                for image in sorted(reference_dir.glob("*.png"))[:6]
-            ]
-        )
+        reference_signature = [
+            (
+                reference.character_id,
+                reference.name,
+                reference.revision,
+                hashlib.sha256(reference.path.read_bytes()).hexdigest(),
+            )
+            for reference in references
+        ]
         scenes = []
         for index, (start, end) in enumerate(intervals):
             progress(
@@ -337,11 +338,11 @@ class VideoProcessor:
             scene_speech = scene_dialogue(dialogue, start, end)
             signature = _fingerprint(
                 [
-                    "vision-v2",
+                    "vision-v3-scoped-identities",
                     self.settings.llm_provider,
                     self.settings.llm_model_id,
                     self.settings.vlm_max_images,
-                    references,
+                    reference_signature,
                     [frame.timestamp for frame in frames],
                     [item.model_dump(mode="json") for item in scene_speech],
                 ]

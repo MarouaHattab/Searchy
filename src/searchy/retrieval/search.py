@@ -3,8 +3,9 @@ from collections import defaultdict
 from pathlib import Path
 
 from searchy.core.config import Settings
-from searchy.core.errors import SearchyError
-from searchy.domain import Scene
+from searchy.core.errors import InvalidInput, SearchyError
+from searchy.domain import Scene, stable_id
+from searchy.storage.characters import CharacterStore
 from searchy.storage.metadata import MetadataStore
 
 STOP_WORDS = set(
@@ -73,11 +74,25 @@ def dialogue_matches(text: str, quoted: list[str], target: set[str]) -> bool:
     )
 
 
-def speaker_matches(scene: Scene, name: str, quoted: list[str], target: set[str]) -> bool:
+def identity_key(scene: Scene, name: str | None, explicit: str | None) -> str | None:
+    return explicit or (
+        stable_id(f"character:{scene.collection_id}:{' '.join(name.casefold().split())}")
+        if name
+        else None
+    )
+
+
+def speaker_matches(
+    scene: Scene, name: str, quoted: list[str], target: set[str], character_id: str | None = None
+) -> bool:
     runs = []
     current = []
     for line in scene.dialogue:
-        if line.speaker and character_matches(line.speaker, name):
+        if (
+            identity_key(scene, line.speaker, line.speaker_id) == character_id
+            if character_id
+            else line.speaker and character_matches(line.speaker, name)
+        ):
             current.append(line.text)
         elif current:
             runs.append(" ".join(current))
@@ -106,7 +121,9 @@ def garment_phrases(text: str) -> list[set[str]]:
     return phrases
 
 
-def clothing_matches(query: str, scene: Scene, requested: list[str]) -> bool:
+def clothing_matches(
+    query: str, scene: Scene, requested: list[str], character_ids: list[str] | None = None
+) -> bool:
     requirements = garment_phrases(query)
     if not requirements:
         if not re.search(r"\b(wearing|wears|outfits?|clothes|clothing)\b", query, re.IGNORECASE):
@@ -119,18 +136,29 @@ def clothing_matches(query: str, scene: Scene, requested: list[str]) -> bool:
     for index, observation in enumerate(scene.observations):
         if observation.kind != "clothing":
             continue
+        subject_id = identity_key(scene, observation.subject, observation.subject_id)
+        if character_ids and subject_id not in character_ids:
+            continue
         if requested and (
             not observation.subject
             or not any(character_matches(observation.subject, name) for name in requested)
         ):
             continue
-        subject = observation.subject.casefold() if observation.subject else f"unassigned:{index}"
+        subject = (
+            subject_id
+            if character_ids
+            else observation.subject.casefold()
+            if observation.subject
+            else f"unassigned:{index}"
+        )
         by_subject[subject].extend(garment_phrases(observation.value))
     matching_subjects = {
         subject
         for subject, phrases in by_subject.items()
         if all(any(required <= phrase for phrase in phrases) for required in requirements)
     }
+    if character_ids:
+        return set(character_ids) <= matching_subjects
     if requested:
         return all(
             any(character_matches(subject, name) for subject in matching_subjects)
@@ -153,6 +181,7 @@ def scene_view(scene: Scene) -> dict:
     return {
         **scene.model_dump(exclude={"media", "frames"}),
         "characters": scene.characters,
+        "character_ids": scene.character_ids,
         "playback": playback(scene),
     }
 
@@ -166,9 +195,8 @@ class SearchEngine:
 
     def requested_characters(self, query: str, collection_id: str | None) -> list[str]:
         known = set(self.metadata.characters(collection_id))
-        refs = self.settings.character_reference_dir
-        if refs and refs.is_dir():
-            known.update(p.stem.replace("_", " ") for p in refs.glob("*.png"))
+        if self.settings.character_reference_dir and self.settings.character_reference_dir.is_dir():
+            known.update(path.stem for path in self.settings.character_reference_dir.glob("*.png"))
         known = {name.strip() for name in known if name.strip()}
         exact = {
             name
@@ -197,8 +225,43 @@ class SearchEngine:
         collection_id: str | None = None,
         mode: str = "hybrid",
         characters: list[str] | None = None,
+        character_ids: list[str] | None = None,
     ) -> dict:
+        registered = (
+            CharacterStore(self.metadata.path).list(collection_id)
+            if hasattr(self.metadata, "path")
+            else []
+        )
+        if character_ids:
+            _, records, _ = self.metadata.catalog_records()
+            known_ids = {
+                identifier
+                for scene, _ in records
+                if collection_id is None or scene.collection_id == collection_id
+                for identifier in scene.character_ids
+            }
+            known_ids.update(character["id"] for character in registered)
+            if not set(character_ids) <= known_ids:
+                raise InvalidInput("Character identifiers must belong to the selected collection")
+        else:
+            matches = defaultdict(list)
+            for character in registered:
+                normalized = " ".join(character["name"].casefold().split())
+                if re.search(rf"\b{re.escape(normalized)}\b", query.casefold()):
+                    matches[normalized].append(character)
+            if any(len(values) > 1 for values in matches.values()):
+                return dict(
+                    query=query,
+                    results=[],
+                    warnings=[
+                        "More than one registered character has this name. Select a character and collection to search a specific identity."
+                    ],
+                    channels=[],
+                    partial=True,
+                )
+            character_ids = [values[0]["id"] for values in matches.values()] or None
         requested = characters or self.requested_characters(query, collection_id)
+        identity_filter = {"character_ids": character_ids} if character_ids else {}
         warnings = []
         if not any(
             c["indexed_scenes"]
@@ -220,7 +283,11 @@ class SearchEngine:
                 (
                     "graph",
                     lambda: self.graph.search(
-                        query, requested, collection_id, self.settings.candidate_limit
+                        query,
+                        requested,
+                        collection_id,
+                        self.settings.candidate_limit,
+                        **identity_filter,
                     ),
                 )
             )
@@ -229,7 +296,7 @@ class SearchEngine:
                 (
                     "text",
                     lambda: self.vectors.search(
-                        query, collection_id, self.settings.candidate_limit
+                        query, collection_id, self.settings.candidate_limit, **identity_filter
                     ),
                 )
             )
@@ -238,7 +305,11 @@ class SearchEngine:
                 (
                     "visual",
                     lambda: self.vectors.search(
-                        query, collection_id, self.settings.candidate_limit, visual=True
+                        query,
+                        collection_id,
+                        self.settings.candidate_limit,
+                        visual=True,
+                        **identity_filter,
                     ),
                 )
             )
@@ -292,11 +363,13 @@ class SearchEngine:
                 continue
             if collection_id is not None and scene.collection_id != collection_id:
                 continue
+            if character_ids and not set(character_ids) <= set(scene.character_ids):
+                continue
             if not all(
                 any(character_matches(c, name) for c in scene.characters) for name in requested
             ):
                 continue
-            if not clothing_matches(clothing_query, scene, requested):
+            if not clothing_matches(clothing_query, scene, requested, character_ids):
                 continue
             transcript = " ".join(d.text for d in scene.dialogue)
             if dialogue_intent and not dialogue_matches(transcript, quoted, dialogue_target):
@@ -322,6 +395,16 @@ class SearchEngine:
                     for name in requested
                 )
             )
+            if character_ids and action_terms and action_terms <= observed:
+                association_unverified = not all(
+                    any(
+                        o.kind in {"action", "interaction"}
+                        and identity_key(scene, o.subject, o.subject_id) == identifier
+                        and action_terms <= normalized_terms(o.value)
+                        for o in scene.observations
+                    )
+                    for identifier in character_ids
+                )
             missing = missing_content + (
                 ["character action association"] if association_unverified else []
             )
@@ -332,6 +415,11 @@ class SearchEngine:
                     speaker_matches(scene, name, quoted, dialogue_target) for name in requested
                 )
             )
+            if character_ids and dialogue_intent:
+                speaker_unverified = not all(
+                    speaker_matches(scene, "", quoted, dialogue_target, identifier)
+                    for identifier in character_ids
+                )
             if speaker_unverified:
                 missing.append("character dialogue association")
             overlap = (len(content_tokens) - len(missing_content)) / max(1, len(content_tokens))
@@ -363,6 +451,7 @@ class SearchEngine:
                     "timestamp_basis": scene.timestamp_basis,
                     "description": scene.description[:700],
                     "matching_characters": scene.characters,
+                    "matching_character_ids": scene.character_ids,
                     "dialogue": relevant_dialogue[:8],
                     "score": round(score, 6),
                     "channel_scores": matched_channels[scene_id],

@@ -1,6 +1,6 @@
 # Searchy
 
-Searchy makes a video collection searchable by dialogue, characters, visual descriptions, and scene-scoped knowledge. Its React workspace brings together natural-language search, video playback, a searchable library, character references, and processing activity. Results include source timestamps, matching evidence, provenance, and playback availability.
+Searchy makes a video collection searchable by dialogue, characters, visual descriptions, and scene-scoped knowledge. Its React workspace brings together natural-language search, video playback, a searchable library, custom character references, an interactive evidence graph, and processing activity. Results include source timestamps, matching evidence, provenance, and playback availability.
 
 Python **3.12**, [uv](https://docs.astral.sh/uv/), Docker, and Node.js **22.12+** are supported. Frontend dependencies are pinned in `frontend/package-lock.json`; Python dependencies are pinned in `uv.lock`.
 
@@ -50,20 +50,21 @@ Copy `.env.example` only once and keep `.env` private. Settings are read from th
 - Text: `LOCAL_EMBEDDING` uses Sentence Transformers. The default `google/embeddinggemma-300m` requires [accepted Hugging Face access terms](https://huggingface.co/google/embeddinggemma-300m) and an authorized `HF_TOKEN` or cached Hugging Face login. It runs in float32 and uses query/document prompts. A smaller ungated option is `sentence-transformers/all-MiniLM-L6-v2`; select it explicitly with a fresh collection.
 - Hugging Face: models cache under `MODEL_CACHE_DIR`. `HF_HUB_ENABLE_HF_TRANSFER` is accepted for compatibility but ignored by modern Hub releases, which [use Xet](https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables). Searchy does not install obsolete `hf-transfer`.
 - Vision: choose `GOOGLE_GENAI` with `GEMINI_API_KEY` and `LLM_MODEL_ID=gemini-3.5-flash-lite`, or `GROQ` with `GROQ_API_KEY` and a currently available **vision-capable** `LLM_MODEL_ID`. [Gemini 3.5 Flash-Lite](https://ai.google.dev/gemini-api/docs/models/gemini-3.5-flash-lite) supports image inputs and structured output. Provider adapters share validated extraction contracts, bounded retries, and sanitized errors. Supplying dialogue does not establish speaker identity. Searchy enforces observation limits locally when a provider cannot accept that schema constraint.
-- `VLM_MAX_IMAGES` limits total evidence and reference images per request (defaults: Gemini 10, Groq 3). References use remaining slots after evidence frames. Set this to your selected model's documented image limit; fewer reference slots mean fewer identifiable characters.
+- `VLM_MAX_IMAGES` limits total evidence and reference images per request (defaults: Gemini 10, Groq 3). References use remaining slots after evidence frames. Set this to your selected model's documented image limit. Canonical identity assignment requires a complete comparison batch; insufficient slots keep people unidentified.
 - `VISUAL_ENABLED=true` enables CLIP frame vectors and text-to-image retrieval with `VISUAL_MODEL_ID`. Scenes without actual frames have no visual vector.
-- `CHARACTER_REFERENCE_DIR` may contain named PNG reference images. Without usable references, uploaded video people remain unidentified. These are VLM-assisted observations, not face recognition or guaranteed identification.
+- `CHARACTER_REFERENCE_DIR` contains legacy named PNG references used for imported catalog browsing. New uploads use only registered references scoped to their collection and optional video; without usable references, people remain unidentified.
+- Optional local face recognition uses OpenCV YuNet and SFace from the [OpenCV Zoo](https://github.com/opencv/opencv_zoo/tree/main/models). Set `FACE_DETECTOR_PATH` and `FACE_RECOGNIZER_PATH` to downloaded ONNX files and install the `video` extra. Keep the models' license notices with the weights. `FACE_MATCH_THRESHOLD=0.5` and `FACE_MATCH_MARGIN=0.08` control automatic candidate qualification; cosine values are not identity probabilities. Without local face models, the configured VLM can compare references. Ambiguous references require review. Upload identity assignment requires all scoped identities to fit one comparison batch within `VLM_MAX_IMAGES`; otherwise extraction keeps people unidentified.
 - Set `API_KEY` to require `X-API-Key` on `/api/*`. This release is for a trusted local workspace: it has no user accounts, tenant isolation, quotas, or public hosting configuration. Bind to localhost.
 
 ## Data and timestamps
 
 The available dataset has been copied into Searchy's own `data/` directory. `IMPORT_ROOT=data/episodes_splitted` and `CHARACTER_REFERENCE_DIR=data/meta` point to these local files; the reference project is no longer required. Keep `data/` when moving or backing up Searchy. It is excluded from Git, so a source-only checkout needs its own dataset copy. Only import media you are authorized to use.
 
-The inspected collection contains **24 Friends season-one episodes, 550 captioned chunks, 9,199 subtitle records, six actual MP4 clips, and six character reference PNGs**. There are 544 metadata-only chunks, no full episodes, and no standalone SRT/VTT files. Aggregate captions are reused; merged summaries are excluded to avoid duplication. Generated descriptions have known character/dialogue inaccuracies and remain explicitly **unverified**, with unknown confidence. Subtitle text is stored independently, with no inferred speaker.
+The inspected collection contains **24 Friends season-one episodes, 550 captioned chunks with local MP4 files, 9,199 subtitle records, and six character reference PNGs**. These are separate chunk files; no full episodes or standalone SRT/VTT files are present. Earlier imports exposed six clips; reimport after adding media to refresh playback references. Aggregate captions are reused; merged summaries are excluded to avoid duplication. Generated descriptions have known character/dialogue inaccuracies and remain explicitly **unverified**, with unknown confidence. Subtitle text is stored independently, with no inferred speaker.
 
 The original preprocessing used fixed 60-second chunks. Imported scene offsets are explicitly marked as inferred; subtitle intervals remain absolute episode seconds, including boundary overlaps. Final chunk duration can be unknown; Searchy never invents an episode duration. Uploaded video intervals come from probed media and grouped shot boundaries. Short shots are merged into bounded retrieval windows; these are not guaranteed narrative scene boundaries.
 
-The six available clips are in episodes **1x11 (chunks 3,4), 1x14 (2,3), 1x15 (5), and 1x21 (4)**. Missing media produces `playback.available=false`; media endpoints return 404. `/media` serves the available source file with HTTP byte ranges and a scene offset; for uploaded videos the player should seek to `playback.start_offset` and stop at the scene end. It does not claim a full episode exists for imported clips.
+Each available chunk can be played independently. Missing or removed media produces `playback.available=false`; media endpoints return 404. `/media` serves the available source file with HTTP byte ranges and a scene offset; for uploaded videos the player should seek to `playback.start_offset` and stop at the scene end. It does not claim a full episode exists for imported clips.
 
 Complete matching episodes can restore playback without repeating transcription or visual analysis. Keep downloaded originals under `data/source_friends/` and place browser-compatible episode files in `EPISODE_MEDIA_DIR` (default `data/episodes`). An episode filename must match its processed episode folder name, ignoring case and whitespace; ambiguous matches are rejected. Use H.264/AAC MP4 files for browser playback, converting or remuxing MKV sources as needed. Renaming an extension does not convert a video. Reimport the collection after adding files. Scene IDs, captions, dialogue, and uncertainty are preserved; playback uses the inferred episode offset and the probed full-video duration. Full episodes take priority over individual clips, and scene intervals are bounded by the actual source duration. All media directories remain excluded from Git.
 
@@ -87,6 +88,18 @@ Other endpoints: `GET /api/jobs`, `/api/collections`, `/api/videos`, `/api/video
 
 Frontend catalog endpoints: `GET /api/workspace`, `/api/library?q=&collection_id=&limit=&offset=`, `/api/videos/{id}`, `/api/characters`, `/api/characters/{id}/reference`, and `/api/characters/{id}/scenes`. `GET /api/scenes/{id}/thumbnail` returns a real cached frame; `/api/scenes/{id}/subtitles.vtt` maps stored dialogue onto the served media timeline. Imported subtitle alignment remains approximate because clip origins are inferred. A reference image identifies the reference label; it does not independently confirm that label in every scene.
 
+## Evidence exploration and custom characters
+
+Search results include a separate AI evidence summary with source links, safe Markdown, copy feedback, and a short display animation after the complete response arrives. This is not token streaming. Reduced-motion preferences show the response immediately. Provider failures leave retrieval results accessible. `POST /api/search/answer` accepts `query`, canonical `scene_ids` (up to 12), optional `collection_id`, and optional `character_ids`.
+
+The Evidence graph tab loads bounded Neo4j records through `POST /api/search/graph`. It supports scene focus, entity/relationship filters, pan, zoom, fit and an evidence inspector linked to results. The overview starts with scenes, characters and context; filters reveal detailed observations. Scene IDs are validated against current indexed metadata. Requests accept no arbitrary Cypher and never expand the entire database.
+
+On Characters, add a name and collection, optionally restrict it to a video, then upload up to five JPEG/PNG/WebP references (10 MB and 12 megapixels each). Reference preparation and recognition are separate durable worker jobs. Start recognition after preparation; only accessible media or sampled frames can be scanned. Review proposed matches using their actual frame and timestamp. Accepted matches are marked human-reviewed; qualified machine candidates stay unverified. Matching faces alone never establishes clothing ownership or who spoke.
+
+Custom identities use immutable IDs rather than names. Renaming updates scene/index labels asynchronously; description-only edits preserve recognition revisions. Replacing references validates the new image before swapping files, invalidates old identity associations, and requires another scan. Deletion removes registered associations while retaining unrelated imported evidence. Unchanged-interval imports preserve valid reviewed evidence; changed boundaries require recognition again. Cross-store writes are not atomic: an interrupted update leaves affected scenes unindexed until repaired.
+
+Character APIs: `POST /api/characters`, `GET/PATCH/DELETE /api/characters/{id}`, `POST /api/characters/{id}/references` (multipart `files`), `DELETE /api/characters/{id}/references/{reference_id}`, `POST /api/characters/{id}/references/{reference_id}/replace` (multipart `file`), `POST /api/characters/{id}/recognize`, `GET /api/characters/{id}/matches?limit=&offset=`, and `PATCH /api/characters/{id}/matches/{match_id}` with `status=accepted|rejected`. Reference and match-frame URLs are supplied by the API. Embeddings and managed filesystem paths are private.
+
 ## Architecture
 
 ```text
@@ -95,11 +108,11 @@ src/searchy/
   core/        validated settings and safe service errors
   ingestion/   processed caption/subtitle/clip import
   processing/  FFprobe, shots, Whisper, frame sampling, extraction caches
-  models/      lazy local embeddings and Gemini/Groq vision adapters
+  models/      text/visual/face embeddings and Gemini/Groq adapters
   graph/       constrained Neo4j writes and parameterized retrieval
   retrieval/   candidate fusion, evidence filters, deterministic reranking
   storage/     SQLite metadata/jobs and Qdrant vectors
-  services/    catalog summaries, media assets, application dependencies
+  services/    catalog, grounded answers, character recognition and media assets
   main.py      FastAPI application
   worker.py    durable ingestion worker
 ```
@@ -108,7 +121,7 @@ src/searchy/
 frontend/src/
   app/         routing and responsive workspace shell
   components/  shared controls and scene cards
-  features/    search, upload, and scene player
+  features/    search, graph exploration, characters, upload and scene player
   pages/       dashboard, library, characters, jobs, settings
   services/    typed HTTP client and shared query options
   lib/         formatting utilities
@@ -120,7 +133,7 @@ React Router loads pages on demand. TanStack Query owns server state, polling, c
 
 Both ingestion modes produce the same validated `Video`, `Scene`, `Dialogue`, `Observation`, and provenance records. Neo4j observations belong to a scene and optionally a precise evidence interval. Explicit subject links carry clothing/actions; co-occurrence never establishes who spoke or wore something. Reindexing replaces scene facts idempotently. Queries use fixed parameterized Cypher and never change indexed knowledge.
 
-Search fuses semantic, visual and graph candidates with reciprocal-rank fusion, then reranks with observable term coverage and attribution checks. Scores are ranking signals, not calibrated probabilities. Results expose contributing channels, evidence and provenance; unsupported constraints are rejected or marked partial. No LLM writes a synthesized answer, scene, or timestamp during search. Literal outfit/quote checks favor precision and can miss synonyms; this first version has no learned cross-encoder reranker.
+Search fuses semantic, visual and graph candidates with reciprocal-rank fusion, then reranks with observable term coverage and attribution checks. Scores are ranking signals, not calibrated probabilities. Results expose contributing channels, evidence and provenance; unsupported constraints are rejected or marked partial. An optional AI explanation is generated separately from retrieval using bounded indexed evidence, validated citations, and server-supplied scene links. It cannot create indexed scenes or timestamps. Model-written claims still need source review; citation validation does not establish factual entailment. Literal outfit/quote checks favor precision and can miss synonyms; this first version has no learned cross-encoder reranker.
 
 SQLite stores queued jobs, leases and progress. A separate heartbeat renews leases during inference; expired jobs can be reclaimed, with three attempts maximum. Only scenes successfully indexed into both external stores are searchable for the current configuration. Failed indexing is repairable by retrying. Writes across SQLite, Neo4j and Qdrant are not a distributed transaction; pending scenes are hidden from search. Run one worker for predictable local GPU/CPU memory and cache access. ASR, shot and VLM outputs are cached using media/model/settings fingerprints.
 

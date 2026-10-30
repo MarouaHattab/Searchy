@@ -26,6 +26,7 @@ class Dialogue(Record):
     end: float = Field(gt=0)
     text: str = Field(min_length=1)
     speaker: str | None = None
+    speaker_id: str | None = None
     provenance: Provenance | None = None
 
     @model_validator(mode="after")
@@ -48,6 +49,8 @@ class Observation(Record):
     kind: ObservationKind
     value: str = Field(min_length=1)
     subject: str | None = None
+    character_id: str | None = None
+    subject_id: str | None = None
     evidence: str = Field(min_length=1)
     start: float | None = Field(default=None, ge=0)
     end: float | None = Field(default=None, ge=0)
@@ -98,6 +101,23 @@ class Scene(Record):
                 ):
                     raise ValueError("Observation interval must be inside its scene")
         return self
+
+    @property
+    def character_ids(self) -> list[str]:
+        def identifier(name: str, explicit: str | None):
+            normalized = " ".join(name.casefold().split())
+            return explicit or stable_id(f"character:{self.collection_id}:{normalized}")
+
+        identifiers = {
+            identifier(o.value, o.character_id)
+            for o in self.observations
+            if o.kind == ObservationKind.CHARACTER
+        }
+        identifiers.update(
+            identifier(o.subject, o.subject_id) for o in self.observations if o.subject
+        )
+        identifiers.update(identifier(d.speaker, d.speaker_id) for d in self.dialogue if d.speaker)
+        return sorted(identifiers)
 
     @property
     def characters(self) -> list[str]:

@@ -13,6 +13,7 @@ from searchy.api.schemas import (
 from searchy.core.config import Settings
 from searchy.domain import ObservationKind, Scene, Video, stable_id
 from searchy.retrieval.search import scene_view
+from searchy.services.characters import CharacterService
 from searchy.storage.metadata import MetadataStore
 
 
@@ -20,6 +21,7 @@ class CatalogService:
     def __init__(self, metadata: MetadataStore, settings: Settings):
         self.metadata = metadata
         self.settings = settings
+        self.registered = CharacterService(settings, metadata)
 
     @staticmethod
     def playable(scene: Scene) -> bool:
@@ -194,12 +196,12 @@ class CatalogService:
         _, scenes, _ = self.metadata.catalog_records()
         names = defaultdict(list)
         for scene, _ in scenes:
-            for name in scene.characters:
-                names[name].append(scene)
+            for name in self._extracted_names(scene):
+                names[(scene.collection_id, name)].append(scene)
         references = self._references()
         result = []
-        for name, appearances in names.items():
-            identifier = stable_id(name)
+        for (collection_id, name), appearances in names.items():
+            identifier = self._extracted_id(collection_id, name)
             reference = references.get(name.casefold())
             unidentified = name.casefold().startswith(
                 ("unidentified", "unknown", "unclear", "unrecognized")
@@ -208,6 +210,7 @@ class CatalogService:
                 CharacterSummary(
                     id=identifier,
                     name=name,
+                    collection_id=collection_id,
                     reference_url=f"/api/characters/{identifier}/reference" if reference else None,
                     scene_count=len(appearances),
                     video_count=len({scene.video_id for scene in appearances}),
@@ -219,10 +222,70 @@ class CatalogService:
                     else "unverified",
                 )
             )
+        for character in self.registered.list():
+            appearances = [
+                scene
+                for scene, indexed in scenes
+                if indexed and character["id"] in getattr(scene, "character_ids", [])
+            ]
+            verified = sum(
+                any(
+                    observation.provenance.verified
+                    and character["id"]
+                    in {
+                        getattr(observation, "character_id", None),
+                        getattr(observation, "subject_id", None),
+                    }
+                    for observation in scene.observations
+                )
+                for scene in appearances
+            )
+            result.append(
+                CharacterSummary(
+                    **{
+                        **{
+                            key: value
+                            for key, value in character.items()
+                            if key in CharacterSummary.model_fields
+                        },
+                        "scene_count": len(appearances),
+                        "video_count": len({scene.video_id for scene in appearances}),
+                        "verified_scene_count": verified,
+                        "reference_count": len(character["references"]),
+                    }
+                )
+            )
         return sorted(result, key=lambda item: (-item.scene_count, item.name.casefold()))
+
+    @staticmethod
+    def _extracted_id(collection_id: str, name: str) -> str:
+        return stable_id(f"character:{collection_id}:{' '.join(name.casefold().split())}")
+
+    @staticmethod
+    def _extracted_names(scene: Scene) -> set[str]:
+        result = set()
+        for observation in scene.observations:
+            if observation.kind == ObservationKind.CHARACTER and not getattr(
+                observation, "character_id", None
+            ):
+                result.add(observation.value)
+            if observation.subject and not getattr(observation, "subject_id", None):
+                result.add(observation.subject)
+        result.update(
+            line.speaker
+            for line in scene.dialogue
+            if line.speaker and not getattr(line, "speaker_id", None)
+        )
+        return result
 
     def reference(self, character_id: str) -> Path | None:
         character = next((item for item in self.characters() if item.id == character_id), None)
+        if character and character.origin == "custom":
+            registered = self.registered.store.get(character_id)
+            if registered and registered["references"]:
+                return self.registered.reference_path(
+                    character_id, registered["references"][0]["id"]
+                )
         return self._references().get(character.name.casefold()) if character else None
 
     def character_scenes(self, character_id: str, limit: int, offset: int) -> list[Scene] | None:
@@ -230,9 +293,16 @@ class CatalogService:
         matches = [
             scene
             for scene, _ in scenes
-            if any(stable_id(name) == character_id for name in scene.characters)
+            if character_id in getattr(scene, "character_ids", [])
+            or any(
+                self._extracted_id(scene.collection_id, name) == character_id
+                or stable_id(name) == character_id
+                for name in self._extracted_names(scene)
+            )
         ]
         if not matches:
+            if self.registered.store.get(character_id):
+                return []
             return None
         return sorted(
             matches,
