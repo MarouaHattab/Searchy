@@ -11,15 +11,36 @@ import {
   Play,
   RotateCcw,
 } from 'lucide-react'
-import { Link, useParams } from 'react-router'
+import { Link, useParams, useSearchParams } from 'react-router'
 import { Badge, Button, ErrorState, Loading } from '../../components/ui'
 import { api, apiUrl, subtitleUrl, thumbnailUrl } from '../../services/api'
 import { episodeTitle, sceneTitle, timestamp } from '../../lib/format'
 import type { Dialogue } from '../../types'
 import { SceneInformation, SceneSidebar } from './SceneDetails'
 
+export function initialPlaybackOffset(
+  requestedTime: number | null,
+  sceneStart: number | null,
+  sceneEnd: number | null,
+  mediaStart: number,
+  duration: number
+) {
+  const fileEnd = Number.isFinite(duration) && duration > 0 ? duration : Infinity
+  const sceneLength =
+    sceneStart != null && sceneEnd != null ? Math.max(0, sceneEnd - sceneStart) : null
+  const end = sceneLength == null ? fileEnd : Math.min(mediaStart + sceneLength, fileEnd)
+  const start = Math.min(Math.max(0, mediaStart), end)
+  const offset =
+    requestedTime != null && Number.isFinite(requestedTime) && sceneStart != null
+      ? requestedTime - sceneStart + mediaStart
+      : start
+  return Math.min(Math.max(offset, start), end)
+}
+
 export default function ScenePage() {
   const { id = '' } = useParams()
+  const [params] = useSearchParams()
+  const requestedTime = params.has('t') ? Number(params.get('t')) : null
   const scene = useQuery({
     queryKey: ['scene', id],
     queryFn: ({ signal }) => api.scene(id, signal),
@@ -42,7 +63,7 @@ export default function ScenePage() {
     setCaptionsFailed(false)
     setDuration(0)
     setCurrent(0)
-  }, [id])
+  }, [id, requestedTime])
 
   if (scene.isPending) return <Loading label="Loading scene…" />
   if (scene.isError)
@@ -115,7 +136,7 @@ export default function ScenePage() {
             <>
               <div className="video-stage">
                 <video
-                  key={id}
+                  key={`${id}:${requestedTime ?? ''}`}
                   ref={player}
                   controls
                   playsInline
@@ -126,8 +147,15 @@ export default function ScenePage() {
                   onLoadedMetadata={() => {
                     if (player.current) {
                       setDuration(player.current.duration)
-                      player.current.currentTime = start
-                      setCurrent(start)
+                      const offset = initialPlaybackOffset(
+                        requestedTime,
+                        data.start,
+                        data.end,
+                        start,
+                        player.current.duration
+                      )
+                      player.current.currentTime = offset
+                      setCurrent(offset)
                     }
                   }}
                   onTimeUpdate={() => {

@@ -1,11 +1,13 @@
 import type {
   Character,
+  EvidenceGraph,
   Job,
   LibraryVideo,
   Readiness,
   SceneDetail,
   SearchRequest,
   SearchResponse,
+  SearchAnswer,
   Workspace,
 } from '../types'
 
@@ -39,13 +41,17 @@ function errorMessage(body: unknown): string {
   return 'The request could not be completed.'
 }
 
-async function request<T>(path: string, options: RequestInit = {}, readiness = false): Promise<T> {
+export async function request<T>(
+  path: string,
+  options: RequestInit = {},
+  readiness = false
+): Promise<T> {
   let response: Response
   const controller = new AbortController()
   const abort = () => controller.abort(options.signal?.reason)
   const timeout = window.setTimeout(
     () => controller.abort(new DOMException('Request timed out', 'TimeoutError')),
-    path === '/api/search' ? 90_000 : 30_000
+    path.startsWith('/api/search') ? 90_000 : 30_000
   )
   options.signal?.addEventListener('abort', abort, { once: true })
   if (options.signal?.aborted) abort()
@@ -122,6 +128,23 @@ export const api = {
     request<Job>(`/api/jobs/${encodeURIComponent(id)}/retry`, { method: 'POST' }),
   search: (body: SearchRequest, signal?: AbortSignal) =>
     request<SearchResponse>('/api/search', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    }),
+  answer: (
+    body: { query: string; scene_ids: string[]; collection_id?: string; character_ids?: string[] },
+    signal?: AbortSignal
+  ) =>
+    request<SearchAnswer>('/api/search/answer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    }),
+  graph: (body: { scene_ids: string[]; collection_id?: string }, signal?: AbortSignal) =>
+    request<EvidenceGraph>('/api/search/graph', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),

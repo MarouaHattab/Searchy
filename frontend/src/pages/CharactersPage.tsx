@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowLeft, ArrowRight, Search, Users } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Plus, Search, Users } from 'lucide-react'
 import { Link, useSearchParams } from 'react-router'
 import { SceneCard } from '../components/SceneCard'
 import {
@@ -16,7 +16,11 @@ import { count } from '../lib/format'
 import { api, apiUrl } from '../services/api'
 import { charactersQuery } from '../services/queries'
 import type { Character } from '../types'
+import { CharacterDialog } from '../features/characters/CharacterDialog'
+import { CharacterManager } from '../features/characters/CharacterManager'
+import { isCustomCharacter, recognitionStatus } from '../features/characters/types'
 import '../styles/management.css'
+import '../styles/characters.css'
 
 function CharacterPortrait({
   character,
@@ -58,12 +62,13 @@ export default function CharactersPage() {
   const [params, setParams] = useSearchParams()
   const [filter, setFilter] = useState('')
   const [expanded, setExpanded] = useState(false)
+  const [adding, setAdding] = useState(false)
   const selected = characters.data?.find((character) => character.id === params.get('character'))
   const offset = Math.max(0, Number(params.get('offset')) || 0)
   const scenes = useQuery({
     queryKey: ['character-scenes', selected?.id, offset],
     queryFn: ({ signal }) => api.characterScenes(selected!.id, offset, signal),
-    enabled: !!selected,
+    enabled: !!selected && !isCustomCharacter(selected),
   })
 
   function select(character: Character) {
@@ -74,6 +79,18 @@ export default function CharactersPage() {
   if (characters.isPending) return <Loading label="Finding characters in your collection…" />
   if (characters.isError)
     return <ErrorState error={characters.error} retry={() => void characters.refetch()} />
+
+  if (selected && isCustomCharacter(selected)) {
+    return (
+      <div className="stack characters-page">
+        <button className="text-link back-link" onClick={() => setParams({})}>
+          <ArrowLeft size={15} />
+          All characters
+        </button>
+        <CharacterManager key={selected.id} id={selected.id} onDeleted={() => setParams({})} />
+      </div>
+    )
+  }
 
   if (selected) {
     const searchParams = new URLSearchParams({
@@ -159,13 +176,27 @@ export default function CharactersPage() {
   const filtered = characters.data.filter((character) =>
     character.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase().trim())
   )
-  const references = filtered.filter((character) => character.identity_status === 'reference')
-  const others = filtered.filter((character) => character.identity_status !== 'reference')
+  const registered = filtered.filter(isCustomCharacter)
+  const references = filtered.filter(
+    (character) => !isCustomCharacter(character) && character.identity_status === 'reference'
+  )
+  const others = filtered.filter(
+    (character) => !isCustomCharacter(character) && character.identity_status !== 'reference'
+  )
   const visibleOthers = expanded || filter ? others : others.slice(0, 12)
   return (
     <div className="stack characters-page">
-      <PageHeading eyebrow="Your collection" title="People, in context.">
-        Explore character references and the scenes associated with them.
+      <PageHeading
+        eyebrow="Your collection"
+        title="People, in context."
+        action={
+          <Button onClick={() => setAdding(true)}>
+            <Plus size={16} />
+            Add character
+          </Button>
+        }
+      >
+        Manage character references and explore their appearances across your collection.
       </PageHeading>
       <div className="toolbar character-toolbar">
         <label className="management-search">
@@ -180,12 +211,40 @@ export default function CharactersPage() {
             }}
           />
         </label>
-        <span className="muted small">{count(characters.data.length)} indexed names</span>
+        <span className="muted small">
+          {count(characters.data.length)} characters and extracted names
+        </span>
       </div>
       {filtered.length === 0 ? (
         <EmptyState title="No characters found">Try another name or clear your search.</EmptyState>
       ) : (
         <>
+          {!!registered.length && (
+            <section className="stack character-section">
+              <SectionHeading title="Your characters" count={registered.length} />
+              <div className="character-reference-grid">
+                {registered.map((character) => (
+                  <button
+                    className="character-reference-card registered-character"
+                    key={character.id}
+                    onClick={() => select(character)}
+                  >
+                    <CharacterPortrait character={character} large />
+                    <span className="character-reference-copy">
+                      <strong>{character.name}</strong>
+                      <span className="muted small">
+                        {character.collection_id} · {count(character.scene_count)} scenes
+                      </span>
+                      <span className="registered-character-status">
+                        {recognitionStatus(character.recognition_status || 'unprocessed')}
+                      </span>
+                    </span>
+                    <ArrowRight size={16} className="character-card-arrow" />
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
           {!!references.length && (
             <section className="stack character-section">
               <SectionHeading title="Character references" count={references.length} />
@@ -249,6 +308,11 @@ export default function CharactersPage() {
           )}
         </>
       )}
+      <CharacterDialog
+        open={adding}
+        onClose={() => setAdding(false)}
+        onCreated={(id) => setParams({ character: id })}
+      />
     </div>
   )
 }

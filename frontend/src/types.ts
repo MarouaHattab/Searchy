@@ -11,6 +11,7 @@ export interface Dialogue {
   end: number
   text: string
   speaker: string | null
+  speaker_id?: string | null
   provenance: Provenance | null
 }
 
@@ -18,6 +19,8 @@ export interface Observation {
   kind: 'character' | 'clothing' | 'action' | 'object' | 'location' | 'interaction'
   value: string
   subject: string | null
+  character_id?: string | null
+  subject_id?: string | null
   evidence: string
   start: number | null
   end: number | null
@@ -48,11 +51,13 @@ export interface Scene {
 export interface SceneDetail extends Scene {
   source_chunk: string | null
   characters: string[]
+  character_ids: string[]
   observations: Observation[]
 }
 
 export interface SceneMatch extends Scene {
   matching_characters: string[]
+  matching_character_ids: string[]
   score: number
   channel_scores: Record<string, number>
   evidence: string[]
@@ -68,11 +73,71 @@ export interface SearchResponse {
   partial: boolean
 }
 
+export interface SearchAnswer {
+  status: 'generated' | 'unavailable' | 'insufficient_evidence'
+  markdown: string
+  claims: { text: string; scene_ids: string[]; evidence_ids: string[] }[]
+  citations: {
+    scene_id: string
+    label: string
+    start: number | null
+    end: number | null
+    timestamp_basis: string
+    available: boolean
+    url: string
+  }[]
+  evidence: {
+    evidence_id: string
+    scene_id: string
+    kind: string
+    text: string
+    verified: boolean
+    confidence: number | null
+    start: number | null
+    end: number | null
+  }[]
+  warnings: string[]
+  provider: string | null
+  model: string | null
+}
+
+export interface EvidenceNode {
+  id: string
+  type: string
+  label: string
+  scene_ids: string[]
+  properties: Record<string, string | number | boolean | null>
+  evidence: string[]
+  start: number | null
+  end: number | null
+  confidence: number | null
+  verified: boolean | null
+}
+
+export interface EvidenceEdge {
+  id: string
+  source: string
+  target: string
+  type: string
+  scene_ids: string[]
+  evidence: string[]
+  derived: boolean
+}
+
+export interface EvidenceGraph {
+  nodes: EvidenceNode[]
+  edges: EvidenceEdge[]
+  truncated: boolean
+  scene_ids: string[]
+  warnings: string[]
+}
+
 export interface SearchRequest {
   query: string
   limit?: number
   collection_id?: string
   characters?: string[]
+  character_ids?: string[]
   mode?: 'hybrid' | 'text' | 'graph' | 'visual'
 }
 
@@ -132,6 +197,14 @@ export interface Character {
   video_count: number
   verified_scene_count: number
   identity_status: 'reference' | 'unverified' | 'unidentified'
+  origin?: 'custom' | 'extracted'
+  collection_id?: string | null
+  video_id?: string | null
+  description?: string
+  status?: string | null
+  recognition_status?: string | null
+  revision?: number | null
+  reference_count?: number
 }
 
 export interface Job {

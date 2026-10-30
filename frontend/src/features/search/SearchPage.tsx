@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowRight, Check, Clock3, Search, SlidersHorizontal, Sparkles, X } from 'lucide-react'
 import { useSearchParams } from 'react-router'
@@ -6,6 +6,10 @@ import { SceneCard } from '../../components/SceneCard'
 import { Button, EmptyState, ErrorState, SectionHeading } from '../../components/ui'
 import { api } from '../../services/api'
 import { charactersQuery, workspaceQuery } from '../../services/queries'
+import { AnswerPanel } from './AnswerPanel'
+import '../../styles/exploration.css'
+
+const EvidenceGraph = lazy(() => import('../graph/EvidenceGraph'))
 
 const suggestions = [
   'Rachel wearing a wedding dress',
@@ -18,14 +22,18 @@ export default function SearchPage() {
   const query = params.get('q')?.trim() ?? ''
   const collection = params.get('collection') ?? ''
   const character = params.get('character') ?? ''
+  const characterId = params.get('character_id') ?? ''
   const limit = Math.min(100, Math.max(12, Number(params.get('limit')) || 12))
   const [draft, setDraft] = useState(query)
   const [playable, setPlayable] = useState(false)
   const [waiting, setWaiting] = useState(false)
+  const [resultView, setResultView] = useState<'scenes' | 'graph'>('scenes')
+  const [focusSceneId, setFocusSceneId] = useState<string | null>(null)
+  const [highlighted, setHighlighted] = useState<string[]>([])
   const workspace = useQuery(workspaceQuery)
   const characters = useQuery(charactersQuery)
   const search = useQuery({
-    queryKey: ['search', query, collection, character, limit],
+    queryKey: ['search', query, collection, character, characterId, limit],
     queryFn: ({ signal }) =>
       api.search(
         {
@@ -33,6 +41,7 @@ export default function SearchPage() {
           limit,
           collection_id: collection || undefined,
           characters: character ? [character] : undefined,
+          character_ids: characterId ? [characterId] : undefined,
         },
         signal
       ),
@@ -44,7 +53,10 @@ export default function SearchPage() {
   useEffect(() => {
     setDraft(query)
     setPlayable(false)
-  }, [query])
+    setResultView('scenes')
+    setFocusSceneId(null)
+    setHighlighted([])
+  }, [query, collection, characterId, character])
   useEffect(() => {
     setWaiting(false)
     if (!search.isFetching) return
@@ -63,7 +75,11 @@ export default function SearchPage() {
   const results =
     search.data?.results.filter((scene) => !playable || scene.playback.available) ?? []
   const knownCharacters =
-    characters.data?.filter((item) => item.identity_status === 'reference') ?? []
+    characters.data?.filter(
+      (item) =>
+        (item.identity_status === 'reference' || item.origin === 'custom') &&
+        (!collection || !item.collection_id || item.collection_id === collection)
+    ) ?? []
 
   function submit() {
     if (!draft.trim()) return
@@ -131,7 +147,14 @@ export default function SearchPage() {
             id="search-collection"
             className="select filter-select"
             value={collection}
-            onChange={(event) => update({ collection: event.target.value, limit: '' })}
+            onChange={(event) =>
+              update({
+                collection: event.target.value,
+                character: '',
+                character_id: '',
+                limit: '',
+              })
+            }
           >
             <option value="">All collections</option>
             {workspace.data?.collections.map((item) => (
@@ -146,23 +169,26 @@ export default function SearchPage() {
           <select
             id="search-character"
             className="select filter-select"
-            value={character}
-            onChange={(event) => update({ character: event.target.value, limit: '' })}
+            value={characterId || character}
+            onChange={(event) => {
+              const selected = knownCharacters.find((item) => item.id === event.target.value)
+              update({ character_id: selected?.id ?? '', character: '', limit: '' })
+            }}
           >
             <option value="">Any character</option>
             {knownCharacters.map((item) => (
-              <option key={item.id} value={item.name}>
+              <option key={item.id} value={item.id}>
                 {item.name}
+                {item.collection_id && !collection ? ` · ${item.collection_id}` : ''}
+                {item.origin === 'custom' ? ` · ${item.id.slice(0, 4)}` : ''}
               </option>
             ))}
-            {character && !knownCharacters.some((item) => item.name === character) && (
-              <option value={character}>{character}</option>
-            )}
+            {character && <option value={character}>{character}</option>}
           </select>
-          {(collection || character) && (
+          {(collection || character || characterId) && (
             <button
               className="text-link muted"
-              onClick={() => update({ collection: '', character: '' })}
+              onClick={() => update({ collection: '', character: '', character_id: '' })}
             >
               Reset filters
               <X size={12} />
@@ -239,6 +265,14 @@ export default function SearchPage() {
             />
           ) : (
             <>
+              {search.data && (
+                <AnswerPanel
+                  query={query}
+                  sceneIds={search.data.results.slice(0, 12).map((scene) => scene.scene_id)}
+                  collection={collection}
+                  characterId={characterId}
+                />
+              )}
               {search.data?.partial && (
                 <div className="notice">
                   <Sparkles size={17} />
@@ -260,40 +294,95 @@ export default function SearchPage() {
                   </ul>
                 </details>
               )}
-              {results.length ? (
-                <div className="scene-grid">
-                  {results.map((scene, index) => (
-                    <SceneCard key={scene.scene_id} scene={scene} rank={index + 1} />
-                  ))}
-                </div>
-              ) : (
-                <EmptyState
-                  title={
-                    playable ? 'No playable clips in these matches' : 'No matching scenes found'
-                  }
-                  action={
-                    playable ? (
-                      <Button variant="secondary" onClick={() => setPlayable(false)}>
-                        Show all matches
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="secondary"
-                        onClick={() => {
-                          setDraft(query)
-                          document.getElementById('scene-query')?.focus()
-                        }}
-                      >
-                        Refine your search
-                      </Button>
-                    )
-                  }
+              {!!search.data?.results.length && (
+                <div
+                  className="result-view-tabs"
+                  role="tablist"
+                  aria-label="Explore search results"
                 >
-                  {playable
-                    ? 'The matching descriptions are still available. Their source video files are not in this workspace.'
-                    : 'Try fewer details or a different phrase. Searchy only returns evidence from the indexed collection.'}
-                </EmptyState>
+                  <button
+                    id="scenes-tab"
+                    role="tab"
+                    aria-controls="scenes-results"
+                    aria-selected={resultView === 'scenes'}
+                    onClick={() => setResultView('scenes')}
+                  >
+                    Scenes
+                  </button>
+                  <button
+                    id="graph-tab"
+                    role="tab"
+                    aria-controls="graph-results"
+                    aria-selected={resultView === 'graph'}
+                    onClick={() => setResultView('graph')}
+                  >
+                    Evidence graph
+                  </button>
+                </div>
               )}
+              {resultView === 'graph' && search.data && (
+                <div id="graph-results" role="tabpanel" aria-labelledby="graph-tab">
+                  <Suspense fallback={<p className="muted">Loading graph explorer…</p>}>
+                    <EvidenceGraph
+                      scenes={search.data.results}
+                      collection={collection}
+                      focusSceneId={focusSceneId}
+                      onSelection={setHighlighted}
+                    />
+                  </Suspense>
+                </div>
+              )}
+              <div
+                id="scenes-results"
+                role="tabpanel"
+                aria-labelledby="scenes-tab"
+                hidden={resultView !== 'scenes'}
+              >
+                {results.length ? (
+                  <div className="scene-grid">
+                    {results.map((scene, index) => (
+                      <SceneCard
+                        key={scene.scene_id}
+                        scene={scene}
+                        rank={index + 1}
+                        selected={highlighted.includes(scene.scene_id)}
+                        onSelect={(id) => {
+                          setFocusSceneId(id)
+                          setHighlighted([id])
+                          setResultView('graph')
+                        }}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <EmptyState
+                    title={
+                      playable ? 'No playable clips in these matches' : 'No matching scenes found'
+                    }
+                    action={
+                      playable ? (
+                        <Button variant="secondary" onClick={() => setPlayable(false)}>
+                          Show all matches
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="secondary"
+                          onClick={() => {
+                            setDraft(query)
+                            document.getElementById('scene-query')?.focus()
+                          }}
+                        >
+                          Refine your search
+                        </Button>
+                      )
+                    }
+                  >
+                    {playable
+                      ? 'The matching descriptions are still available. Their source video files are not in this workspace.'
+                      : 'Try fewer details or a different phrase. Searchy only returns evidence from the indexed collection.'}
+                  </EmptyState>
+                )}
+              </div>
               {!!results.length && search.data?.results.length === limit && limit < 100 && (
                 <div className="load-more">
                   <Button

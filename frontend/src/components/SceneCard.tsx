@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
-import { ArrowUpRight, Clapperboard, FileText, Play, Quote } from 'lucide-react'
+import { ArrowUpRight, Clapperboard, FileText, GitBranch, Play, Quote } from 'lucide-react'
 import { episodeTitle, excerpt, sceneTitle, timestamp } from '../lib/format'
 import { api, thumbnailUrl } from '../services/api'
 import type { SceneDetail, SceneMatch } from '../types'
@@ -40,10 +40,14 @@ export function SceneCard({
   scene,
   compact = false,
   rank,
+  selected = false,
+  onSelect,
 }: {
   scene: SceneDetail | SceneMatch
   compact?: boolean
   rank?: number
+  selected?: boolean
+  onSelect?: (sceneId: string) => void
 }) {
   const video = useQuery({
     queryKey: ['video', scene.video_id],
@@ -57,7 +61,9 @@ export function SceneCard({
     ? sceneTitle(scene.episode_id)
     : (video.data?.title ?? 'Uploaded video')
   return (
-    <article className={`scene-card ${compact ? 'scene-card-compact' : ''}`}>
+    <article
+      className={`scene-card ${compact ? 'scene-card-compact' : ''} ${selected ? 'scene-card-selected' : ''}`}
+    >
       <Link
         className="scene-image-link"
         to={`/scenes/${scene.scene_id}`}
@@ -121,6 +127,15 @@ export function SceneCard({
               </>
             )}
           </Badge>
+          {onSelect && (
+            <button
+              className="icon-button"
+              aria-label="Explore scene evidence"
+              onClick={() => onSelect(scene.scene_id)}
+            >
+              <GitBranch size={16} />
+            </button>
+          )}
           <Link className="icon-link" to={`/scenes/${scene.scene_id}`} aria-label="Open scene">
             <ArrowUpRight size={18} />
           </Link>
