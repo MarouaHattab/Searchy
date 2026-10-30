@@ -291,6 +291,7 @@ def import_chunks(
     collection_id: str = "friends",
     limit: int | None = None,
     ffprobe_path: str | None = None,
+    episode_media_dir: Path | None = None,
 ) -> ImportResult:
     if limit is not None and limit < 1:
         raise InvalidInput("Import limit must be at least 1")
@@ -308,6 +309,25 @@ def import_chunks(
         aggregate = _read_json(episode / "all_captions.json", result.warnings)
         names = _chunk_names(episode, aggregate)
         video_id = stable_id(f"{collection_id}:{episode.name.strip()}")
+        full_media = None
+        if episode_media_dir is not None:
+            normalized = " ".join(episode.name.casefold().split())
+            matches = [
+                path
+                for path in _media_files(episode_media_dir)
+                if " ".join(path.stem.casefold().split()) == normalized
+            ]
+            if len(matches) > 1:
+                raise InvalidInput(f"Ambiguous full-episode media for {episode.name}")
+            if matches:
+                if probe is None:
+                    result.warnings.append(
+                        f"FFprobe is required to attach full-episode media for {episode.name}"
+                    )
+                else:
+                    valid, duration = _probe_duration(matches[0], probe, result.warnings)
+                    if valid and duration is not None:
+                        full_media = Media(path=str(matches[0].resolve()), duration=duration)
         episode_scenes: list[Scene] = []
         for name in names:
             if limit is not None and len(result.scenes) + len(episode_scenes) >= limit:
@@ -346,6 +366,24 @@ def import_chunks(
                     basis = "inferred_chunk_start_and_subtitle_evidence_end"
                 else:
                     start, end, basis = None, None, "unknown_final_chunk_duration"
+            chunk_provenance = Provenance(source=str(chunk), method=basis)
+            media_provenance = []
+            if full_media is not None:
+                if low < full_media.duration:
+                    media = full_media.model_copy(update={"start_offset": low})
+                    start, end = low, min(high, full_media.duration)
+                    basis = "inferred_nominal_chunk_offset_bounded_by_episode_duration"
+                    media_provenance.append(
+                        Provenance(
+                            source=full_media.path,
+                            method="matched_full_episode_using_nominal_60_second_chunk_offset",
+                        )
+                    )
+                else:
+                    result.warnings.append(
+                        f"{episode.name}/{name} starts beyond the full-episode duration; "
+                        "retained original clip or metadata-only availability"
+                    )
             episode_scenes.append(
                 Scene(
                     scene_id=stable_id(f"{collection_id}:{episode.name.strip()}:{name}"),
@@ -360,7 +398,8 @@ def import_chunks(
                     dialogue=dialogue,
                     observations=_observations(caption, provenance),
                     provenance=([provenance] if caption else [])
-                    + [Provenance(source=str(chunk), method=basis)],
+                    + [chunk_provenance]
+                    + media_provenance,
                     media=media,
                 )
             )
@@ -372,6 +411,8 @@ def import_chunks(
                     title=episode.name.strip(),
                     original_id=episode.name,
                     source_kind="import",
+                    duration=full_media.duration if full_media else None,
+                    media_path=full_media.path if full_media else None,
                 )
             )
             result.scenes.extend(episode_scenes)

@@ -29,14 +29,18 @@ class Worker:
             progress(0.05 + 0.45 * index / len(scenes), "sampling available imported clips")
             path = Path(scene.media.path)
             metadata = processor.probe(path)
-            length = min(metadata.duration, scene.end - scene.start)
+            offset = scene.media.start_offset
+            length = min(metadata.duration - offset, scene.end - scene.start)
+            if length <= 0:
+                raise SearchyError("Imported scene starts beyond its source media duration", 422)
             identity = stable_id(
                 f"{path.resolve()}:{path.stat().st_size}:{path.stat().st_mtime_ns}"
             )
             cache = (self.settings.data_dir / "processing" / "import_frames" / identity).resolve()
-            frames = processor.sample_frames(path, 0, length, cache)
+            frames = processor.sample_frames(path, offset, offset + length, cache)
             scene.frames = [
-                f.model_copy(update={"timestamp": scene.start + f.timestamp}) for f in frames
+                f.model_copy(update={"timestamp": scene.start + f.timestamp - offset})
+                for f in frames
             ]
             scene.provenance.append(
                 Provenance(
@@ -126,6 +130,7 @@ class Worker:
                 payload["collection_id"],
                 payload.get("limit"),
                 ffprobe_path=self.settings.ffprobe_path,
+                episode_media_dir=self.settings.episode_media_dir,
             )
             videos, scenes, warnings = imported.videos, imported.scenes, imported.warnings
             if self.settings.visual_enabled:

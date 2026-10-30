@@ -10,6 +10,7 @@ class Settings(BaseSettings):
 
     data_dir: Path = Path("var")
     import_root: Path = Path("data/episodes_splitted")
+    episode_media_dir: Path | None = Path("data/episodes")
     character_reference_dir: Path | None = Path("data/meta")
     neo4j_uri: str = "bolt://localhost:7687"
     neo4j_user: str = "neo4j"

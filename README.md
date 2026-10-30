@@ -65,6 +65,8 @@ The original preprocessing used fixed 60-second chunks. Imported scene offsets a
 
 The six available clips are in episodes **1x11 (chunks 3,4), 1x14 (2,3), 1x15 (5), and 1x21 (4)**. Missing media produces `playback.available=false`; media endpoints return 404. `/media` serves the available source file with HTTP byte ranges and a scene offset; for uploaded videos the player should seek to `playback.start_offset` and stop at the scene end. It does not claim a full episode exists for imported clips.
 
+Complete matching episodes can restore playback without repeating transcription or visual analysis. Keep downloaded originals under `data/source_friends/` and place browser-compatible episode files in `EPISODE_MEDIA_DIR` (default `data/episodes`). An episode filename must match its processed episode folder name, ignoring case and whitespace; ambiguous matches are rejected. Use H.264/AAC MP4 files for browser playback, converting or remuxing MKV sources as needed. Renaming an extension does not convert a video. Reimport the collection after adding files. Scene IDs, captions, dialogue, and uncertainty are preserved; playback uses the inferred episode offset and the probed full-video duration. Full episodes take priority over individual clips, and scene intervals are bounded by the actual source duration. All media directories remain excluded from Git.
+
 The leather-pants and “don't share food” example scenes are not evidenced in this season-one dataset. An example query is not a guarantee that its scene exists.
 
 ## API examples
