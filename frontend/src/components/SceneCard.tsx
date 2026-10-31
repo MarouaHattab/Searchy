@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
 import { ArrowUpRight, Clapperboard, FileText, GitBranch, Play, Quote } from 'lucide-react'
 import { episodeTitle, excerpt, sceneTitle, timestamp } from '../lib/format'
+import { sceneHref } from '../features/player/navigation'
 import { api, thumbnailUrl } from '../services/api'
 import type { SceneDetail, SceneMatch } from '../types'
 import { Badge } from './ui'
@@ -42,12 +43,16 @@ export function SceneCard({
   rank,
   selected = false,
   onSelect,
+  onOpen,
+  origin,
 }: {
   scene: SceneDetail | SceneMatch
   compact?: boolean
   rank?: number
   selected?: boolean
   onSelect?: (sceneId: string) => void
+  origin?: string
+  onOpen?: () => void
 }) {
   const video = useQuery({
     queryKey: ['video', scene.video_id],
@@ -60,13 +65,15 @@ export function SceneCard({
   const title = scene.episode_id
     ? sceneTitle(scene.episode_id)
     : (video.data?.title ?? 'Uploaded video')
+  const target = sceneHref(scene.scene_id, scene.start, origin)
   return (
     <article
       className={`scene-card ${compact ? 'scene-card-compact' : ''} ${selected ? 'scene-card-selected' : ''}`}
     >
       <Link
         className="scene-image-link"
-        to={`/scenes/${scene.scene_id}`}
+        to={target}
+        onClick={onOpen}
         aria-label={`${scene.playback.available ? 'Play' : 'View'} ${episodeTitle(scene.episode_id)} at ${timestamp(scene.start)}`}
       >
         <SceneThumbnail
@@ -85,7 +92,9 @@ export function SceneCard({
           {rank !== undefined && <span className="muted small">#{rank}</span>}
         </div>
         <h3>
-          <Link to={`/scenes/${scene.scene_id}`}>{title}</Link>
+          <Link to={target} onClick={onOpen}>
+            {title}
+          </Link>
         </h3>
         {scene.episode_id && (
           <p className="scene-episode-label">{episodeTitle(scene.episode_id)}</p>
@@ -136,7 +145,7 @@ export function SceneCard({
               <GitBranch size={16} />
             </button>
           )}
-          <Link className="icon-link" to={`/scenes/${scene.scene_id}`} aria-label="Open scene">
+          <Link className="icon-link" to={target} onClick={onOpen} aria-label="Open scene">
             <ArrowUpRight size={18} />
           </Link>
         </div>

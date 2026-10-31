@@ -68,7 +68,6 @@ export function Shell() {
   }, [])
   useEffect(() => {
     setMobile(false)
-    window.scrollTo(0, 0)
     document.title = `${currentPage} · Searchy`
   }, [location.pathname, currentPage])
   useEffect(() => {

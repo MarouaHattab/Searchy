@@ -1,200 +1,110 @@
-import { useEffect, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Check, Copy, LoaderCircle, ScanSearch } from 'lucide-react'
-import Markdown from 'react-markdown'
+import { useState } from 'react'
+import { Check, Copy, LoaderCircle, ScanSearch, Square } from 'lucide-react'
 import { Link } from 'react-router'
-import { api } from '../../services/api'
-import { timestamp } from '../../lib/format'
-
-function useAnswerReveal(text: string) {
-  const [visible, setVisible] = useState(text)
-  useEffect(() => {
-    const preference = window.matchMedia('(prefers-reduced-motion: reduce)')
-    if (!text || preference.matches) {
-      setVisible(text)
-      return
-    }
-    const words = text.match(/\S+\s*/g) ?? []
-    const started = performance.now()
-    setVisible('')
-    const reveal = () => {
-      const progress = Math.min(1, (performance.now() - started) / 650)
-      setVisible(words.slice(0, Math.ceil(words.length * progress)).join(''))
-      if (progress === 1) window.clearInterval(timer)
-    }
-    const timer = window.setInterval(reveal, 35)
-    const showAll = () => {
-      if (preference.matches) {
-        window.clearInterval(timer)
-        setVisible(text)
-      }
-    }
-    preference.addEventListener('change', showAll)
-    return () => {
-      window.clearInterval(timer)
-      preference.removeEventListener('change', showAll)
-    }
-  }, [text])
-  return visible
-}
+import { sceneHref } from '../player/navigation'
+import type { useAnswer } from './useAnswer'
 
 export function AnswerPanel({
-  query,
-  sceneIds,
-  collection,
-  characterId,
+  state,
+  origin,
+  onOpen,
+  retrievalWarnings,
 }: {
-  query: string
-  sceneIds: string[]
-  collection: string
-  characterId: string
+  state: ReturnType<typeof useAnswer>
+  origin: string
+  onOpen: () => void
+  retrievalWarnings: string[]
 }) {
-  const answer = useQuery({
-    queryKey: ['search-answer', query, sceneIds, collection, characterId],
-    queryFn: ({ signal }) =>
-      api.answer(
-        {
-          query,
-          scene_ids: sceneIds,
-          collection_id: collection || undefined,
-          character_ids: characterId ? [characterId] : undefined,
-        },
-        signal
-      ),
-    retry: false,
-    staleTime: 10 * 60_000,
-  })
-  const text = answer.data?.markdown ?? ''
-  const visible = useAnswerReveal(text)
+  const { answer, partial, pending, failed, stopped, cancel, retry } = state
   const [copied, setCopied] = useState(false)
-  const [copyError, setCopyError] = useState(false)
-  const [expanded, setExpanded] = useState(false)
-  useEffect(() => {
-    setCopied(false)
-    setCopyError(false)
-    setExpanded(false)
-  }, [text])
-  useEffect(() => {
-    if (!copied) return
-    const timeout = window.setTimeout(() => setCopied(false), 2000)
-    return () => window.clearTimeout(timeout)
-  }, [copied])
-  const links = new Set(answer.data?.citations.map((source) => source.url) ?? [])
+  const content = pending ? partial : (answer ?? partial)
+  const warnings = [
+    ...new Set([...(pending ? [] : (answer?.warnings ?? [])), ...retrievalWarnings]),
+  ]
+  if (!content && !pending && !failed && !stopped) return null
   return (
-    <section
-      className="answer-panel panel"
-      aria-labelledby="answer-heading"
-      aria-busy={answer.isFetching}
-    >
-      <div className="answer-heading">
-        <span className="answer-mark">
-          <ScanSearch size={19} />
+    <section className="answer-panel" aria-labelledby="answer-heading" aria-busy={pending}>
+      <header className="answer-heading">
+        <span className="answer-mark" aria-hidden="true">
+          <ScanSearch size={16} />
         </span>
         <h2 id="answer-heading">Searchy AI</h2>
-        <span className="muted small">
-          {answer.isFetching ? 'Preparing explanation' : 'Evidence summary'}
+        <span className="answer-meta">
+          {pending
+            ? 'Checking evidence'
+            : answer?.retrieval.graph_used
+              ? 'Graph + scene evidence'
+              : 'Scene evidence'}
         </span>
-        {text && (
-          <button
-            className="icon-button"
-            aria-label={copied ? 'Response copied' : 'Copy response'}
-            onClick={() => {
-              void navigator.clipboard
-                .writeText(text)
-                .then(() => {
-                  setCopied(true)
-                  setCopyError(false)
-                })
-                .catch(() => setCopyError(true))
-            }}
-          >
-            {copied ? <Check size={16} /> : <Copy size={16} />}
+        {pending && (
+          <button className="answer-action" onClick={cancel} aria-label="Stop answer generation">
+            <Square size={14} />
           </button>
         )}
-      </div>
-      {answer.isPending ? (
-        <p className="answer-activity" role="status">
-          <LoaderCircle size={16} className="spin" /> Preparing an explanation from the retrieved
-          evidence…
+        {!!content?.answer && (
+          <button
+            className="answer-action"
+            aria-label={copied ? 'Answer copied' : 'Copy answer'}
+            onClick={() => {
+              void navigator.clipboard
+                .writeText(content.answer)
+                .then(() => setCopied(true))
+                .catch(() => undefined)
+            }}
+          >
+            {copied ? <Check size={15} /> : <Copy size={15} />}
+          </button>
+        )}
+      </header>
+      {content?.claims.map((claim, index) => (
+        <p className="answer-copy answer-reveal" key={`${index}-${claim.text}`}>
+          {claim.text}{' '}
+          {claim.scene_ids.map((id) => {
+            const citation = content.citations.find((c) => c.scene_id === id)
+            if (!citation) return null
+            return (
+              <Link
+                key={id}
+                className="answer-inline-citation"
+                to={sceneHref(id, citation.start, origin)}
+                onClick={onOpen}
+                title={citation.episode_id ?? citation.label}
+              >
+                {citation.label}
+              </Link>
+            )
+          })}
         </p>
-      ) : answer.isError ? (
-        <p className="muted">
-          The explanation is unavailable. Your scene results are still ready.{' '}
-          <button className="text-link" onClick={() => void answer.refetch()}>
+      ))}
+      {pending && (
+        <p className="answer-activity" role="status">
+          <LoaderCircle size={14} className="spin" />
+          {content?.claims.length
+            ? 'Checking the next supporting statement…'
+            : 'Reading scene and graph evidence…'}
+        </p>
+      )}
+      {(failed || stopped || answer?.status === 'unavailable') && (
+        <p className="answer-fallback">
+          {stopped ? 'Generation stopped.' : 'The explanation was interrupted.'} Your scene results
+          are still available.{' '}
+          <button className="text-link" onClick={retry}>
             Try again
           </button>
         </p>
-      ) : answer.data.status !== 'generated' ? (
-        <p className="muted">
-          {answer.data.status === 'insufficient_evidence'
-            ? 'There is not enough indexed evidence to explain this query reliably.'
-            : 'AI explanations are currently unavailable. You can still explore the scene results and their evidence.'}
-        </p>
-      ) : (
-        <>
-          <div
-            className={`answer-copy ${expanded ? '' : 'answer-copy-collapsed'}`}
-            aria-hidden={visible !== text}
-          >
-            <Markdown
-              skipHtml
-              allowedElements={[
-                'p',
-                'strong',
-                'em',
-                'ul',
-                'ol',
-                'li',
-                'blockquote',
-                'code',
-                'br',
-                'a',
-              ]}
-              components={{
-                a: ({ href, children }) =>
-                  href && links.has(href) ? (
-                    <Link to={href}>{children}</Link>
-                  ) : (
-                    <span>{children}</span>
-                  ),
-              }}
-            >
-              {visible}
-            </Markdown>
-          </div>
-          <span className="sr-only" role="status">
-            {visible === text ? text : ''}
-          </span>
-          {text.length > 800 && (
-            <button
-              className="text-link"
-              aria-expanded={expanded}
-              onClick={() => setExpanded(!expanded)}
-            >
-              {expanded ? 'Show less' : 'Read full explanation'}
-            </button>
-          )}
-          <div className="answer-sources" aria-label="Supporting scenes">
-            {answer.data.citations.map((source, index) => (
-              <Link key={source.scene_id} to={`/scenes/${source.scene_id}`} title={source.label}>
-                <span>{index + 1}</span>
-                {source.label} <span className="muted">{timestamp(source.start)}</span>
-              </Link>
-            ))}
-          </div>
-        </>
       )}
-      {copyError && (
-        <p className="small muted" role="status">
-          Copy was unavailable. You can select and copy the explanation text.
+      {answer?.status === 'insufficient_evidence' && (
+        <p className="answer-fallback">
+          The retrieved evidence does not support an answer to this question. Explore the possible
+          matches below or refine your question.
         </p>
       )}
-      {!!answer.data?.warnings.length && (
-        <details className="answer-notes">
-          <summary>Evidence and limitations</summary>
-          <ul>
-            {answer.data.warnings.map((warning) => (
-              <li key={warning}>{warning}</li>
+      {!!warnings.length && (
+        <details className="answer-evidence">
+          <summary>Evidence details · {warnings.length} limitations</summary>
+          <ul className="answer-notes">
+            {warnings.map((w) => (
+              <li key={w}>{w}</li>
             ))}
           </ul>
         </details>

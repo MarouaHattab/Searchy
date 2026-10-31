@@ -1,12 +1,15 @@
-import { lazy, Suspense, useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { ArrowRight, Check, Clock3, Search, SlidersHorizontal, Sparkles, X } from 'lucide-react'
-import { useSearchParams } from 'react-router'
+import { ArrowRight, Check, Clock3, Search, SlidersHorizontal, X } from 'lucide-react'
+import { useLocation, useSearchParams } from 'react-router'
 import { SceneCard } from '../../components/SceneCard'
 import { Button, EmptyState, ErrorState, SectionHeading } from '../../components/ui'
-import { api } from '../../services/api'
+import { api, ApiError } from '../../services/api'
 import { charactersQuery, workspaceQuery } from '../../services/queries'
 import { AnswerPanel } from './AnswerPanel'
+import { useAnswer } from './useAnswer'
+import { rankingOf, useResultScroll } from './state'
+import { rememberOrigin } from '../player/navigation'
 import '../../styles/exploration.css'
 
 const EvidenceGraph = lazy(() => import('../graph/EvidenceGraph'))
@@ -19,44 +22,73 @@ const suggestions = [
 
 export default function SearchPage() {
   const [params, setParams] = useSearchParams()
+  const location = useLocation()
   const query = params.get('q')?.trim() ?? ''
   const collection = params.get('collection') ?? ''
   const character = params.get('character') ?? ''
   const characterId = params.get('character_id') ?? ''
   const limit = Math.min(100, Math.max(12, Number(params.get('limit')) || 12))
   const [draft, setDraft] = useState(query)
-  const [playable, setPlayable] = useState(false)
+  const playable = params.get('playable') === '1'
+  const setPlayable = (value: boolean) => update({ playable: value ? '1' : '' })
   const [waiting, setWaiting] = useState(false)
-  const [resultView, setResultView] = useState<'scenes' | 'graph'>('scenes')
-  const [focusSceneId, setFocusSceneId] = useState<string | null>(null)
+  const forceFresh = useRef(false)
+  const resultView = params.get('view') === 'graph' ? 'graph' : 'scenes'
+  const setResultView = (value: 'scenes' | 'graph') =>
+    update({ view: value === 'graph' ? 'graph' : '' })
+  const focusSceneId = params.get('focus')
+  const setFocusSceneId = (value: string | null) => update({ focus: value ?? '', view: 'graph' })
   const [highlighted, setHighlighted] = useState<string[]>([])
   const workspace = useQuery(workspaceQuery)
   const characters = useQuery(charactersQuery)
   const search = useQuery({
     queryKey: ['search', query, collection, character, characterId, limit],
-    queryFn: ({ signal }) =>
-      api.search(
-        {
-          query,
-          limit,
-          collection_id: collection || undefined,
-          characters: character ? [character] : undefined,
-          character_ids: characterId ? [characterId] : undefined,
-        },
-        signal
-      ),
+    queryFn: async ({ signal }) => {
+      const body = {
+        query,
+        limit,
+        collection_id: collection || undefined,
+        characters: character ? [character] : undefined,
+        character_ids: characterId ? [characterId] : undefined,
+      }
+      const sid = forceFresh.current ? null : params.get('sid')
+      forceFresh.current = false
+      if (sid) {
+        try {
+          const saved = await api.session(sid, signal)
+          if (
+            saved.request.query === query &&
+            (saved.request.collection_id ?? '') === collection &&
+            (saved.request.limit ?? 10) === limit &&
+            (saved.request.characters?.[0] ?? '') === character &&
+            (saved.request.character_ids?.[0] ?? '') === characterId
+          )
+            return saved.response
+        } catch (error) {
+          if (!(error instanceof ApiError) || ![404, 409].includes(error.status)) throw error
+        }
+      }
+      return api.search(body, signal)
+    },
     enabled: !!query,
     retry: false,
-    staleTime: 5 * 60_000,
+    staleTime: Infinity,
+    gcTime: 60 * 60_000,
   })
 
   useEffect(() => {
     setDraft(query)
-    setPlayable(false)
-    setResultView('scenes')
-    setFocusSceneId(null)
     setHighlighted([])
+    if (!params.get('sid')) window.scrollTo(0, 0)
   }, [query, collection, characterId, character])
+  useEffect(() => {
+    const id = search.data?.search_id
+    if (id && params.get('sid') !== id) {
+      const next = new URLSearchParams(params)
+      next.set('sid', id)
+      setParams(next, { replace: true })
+    }
+  }, [search.data, params, setParams])
   useEffect(() => {
     setWaiting(false)
     if (!search.isFetching) return
@@ -69,11 +101,39 @@ export default function SearchPage() {
     Object.entries(values).forEach(([key, value]) =>
       value ? next.set(key, value) : next.delete(key)
     )
+    if (
+      Object.keys(values).some((key) =>
+        ['q', 'collection', 'character', 'character_id', 'limit'].includes(key)
+      )
+    ) {
+      next.delete('sid')
+      next.delete('view')
+      next.delete('focus')
+    }
     setParams(next)
   }
 
   const results =
     search.data?.results.filter((scene) => !playable || scene.playback.available) ?? []
+  const searchHref = `${location.pathname}?${params.toString()}`
+  const answer = useAnswer({
+    query,
+    scene_ids: search.data?.results.slice(0, 12).map((s) => s.scene_id) ?? [],
+    collection_id: collection || undefined,
+    character_ids: characterId ? [characterId] : undefined,
+    search_id: search.data?.search_id,
+  })
+  useResultScroll(searchHref, !search.isFetching && !!search.data && !answer.pending)
+
+  function openScene() {
+    rememberOrigin({
+      href: searchHref,
+      query,
+      sceneIds: rankingOf(results),
+      scroll: window.scrollY,
+      tab: resultView,
+    })
+  }
   const knownCharacters =
     characters.data?.filter(
       (item) =>
@@ -83,8 +143,13 @@ export default function SearchPage() {
 
   function submit() {
     if (!draft.trim()) return
-    if (draft.trim() === query && limit === 12) void search.refetch()
-    else update({ q: draft.trim(), limit: '' })
+    if (draft.trim() === query && limit === 12) {
+      if (search.isFetching) return
+      forceFresh.current = true
+      void search.refetch()
+      return
+    }
+    update({ q: draft.trim(), limit: '' })
   }
 
   return (
@@ -267,26 +332,16 @@ export default function SearchPage() {
             <>
               {search.data && (
                 <AnswerPanel
-                  query={query}
-                  sceneIds={search.data.results.slice(0, 12).map((scene) => scene.scene_id)}
-                  collection={collection}
-                  characterId={characterId}
+                  key={query + characterId + collection}
+                  state={answer}
+                  retrievalWarnings={search.data.warnings}
+                  origin={searchHref}
+                  onOpen={openScene}
                 />
               )}
-              {search.data?.partial && (
-                <div className="notice">
-                  <Sparkles size={17} />
-                  <div>
-                    <strong>Some details could not be verified.</strong>
-                    <p>
-                      These are the closest evidenced matches. Open a scene to review the source.
-                    </p>
-                  </div>
-                </div>
-              )}
-              {!!search.data?.warnings.length && (
+              {!search.data?.results.length && !!search.data?.warnings.length && (
                 <details className="search-warnings">
-                  <summary>Search notes ({search.data.warnings.length})</summary>
+                  <summary>Some matching details need verification</summary>
                   <ul>
                     {search.data.warnings.map((warning) => (
                       <li key={warning}>{warning}</li>
@@ -325,6 +380,10 @@ export default function SearchPage() {
                   <Suspense fallback={<p className="muted">Loading graph explorer…</p>}>
                     <EvidenceGraph
                       scenes={search.data.results}
+                      answerGraph={answer.answer?.graph}
+                      stateKey={search.data.search_id}
+                      origin={searchHref}
+                      onOpen={openScene}
                       collection={collection}
                       focusSceneId={focusSceneId}
                       onSelection={setHighlighted}
@@ -345,11 +404,12 @@ export default function SearchPage() {
                         key={scene.scene_id}
                         scene={scene}
                         rank={index + 1}
+                        onOpen={openScene}
+                        origin={searchHref}
                         selected={highlighted.includes(scene.scene_id)}
                         onSelect={(id) => {
                           setFocusSceneId(id)
                           setHighlighted([id])
-                          setResultView('graph')
                         }}
                       />
                     ))}

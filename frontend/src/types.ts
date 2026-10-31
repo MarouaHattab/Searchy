@@ -66,6 +66,8 @@ export interface SceneMatch extends Scene {
 }
 
 export interface SearchResponse {
+  search_id: string
+  query_plan: { primary_type: string; types: string[] }
   query: string
   results: SceneMatch[]
   warnings: string[]
@@ -74,18 +76,14 @@ export interface SearchResponse {
 }
 
 export interface SearchAnswer {
+  search_id: string | null
+  graph: EvidenceGraph
+  retrieval: { strategy: string; graph_used: boolean; context_characters?: number }
   status: 'generated' | 'unavailable' | 'insufficient_evidence'
+  answer: string
   markdown: string
   claims: { text: string; scene_ids: string[]; evidence_ids: string[] }[]
-  citations: {
-    scene_id: string
-    label: string
-    start: number | null
-    end: number | null
-    timestamp_basis: string
-    available: boolean
-    url: string
-  }[]
+  citations: AnswerCitation[]
   evidence: {
     evidence_id: string
     scene_id: string
@@ -96,9 +94,28 @@ export interface SearchAnswer {
     start: number | null
     end: number | null
   }[]
+  relationships: {
+    scene_id: string
+    characters: string[]
+    entities: Record<string, string[]>
+  }[]
+  constraints: { label: string; supported: boolean; detail: string }[]
   warnings: string[]
   provider: string | null
   model: string | null
+  query_type: string | null
+}
+
+export interface AnswerCitation {
+  evidence_ids: string[]
+  scene_id: string
+  label: string
+  episode_id: string | null
+  start: number | null
+  end: number | null
+  timestamp_basis: string
+  available: boolean
+  url: string
 }
 
 export interface EvidenceNode {

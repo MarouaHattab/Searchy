@@ -133,6 +133,11 @@ export const api = {
       body: JSON.stringify(body),
       signal,
     }),
+  session: (id: string, signal?: AbortSignal) =>
+    request<{ request: SearchRequest; response: SearchResponse; answer: SearchAnswer | null }>(
+      `/api/search/sessions/${encodeURIComponent(id)}`,
+      { signal }
+    ),
   answer: (
     body: { query: string; scene_ids: string[]; collection_id?: string; character_ids?: string[] },
     signal?: AbortSignal
@@ -201,4 +206,86 @@ export function uploadVideo(
     data.append('collection_id', collection)
     xhr.send(data)
   })
+}
+
+export interface AnswerRequest {
+  query: string
+  scene_ids: string[]
+  collection_id?: string
+  character_ids?: string[]
+  search_id?: string
+}
+
+export interface AnswerStreamHandlers {
+  onDelta: (value: Pick<SearchAnswer, 'answer' | 'claims' | 'citations'>) => void
+}
+
+export async function streamAnswer(
+  body: AnswerRequest,
+  handlers: AnswerStreamHandlers,
+  signal: AbortSignal
+): Promise<SearchAnswer> {
+  const timeout = AbortSignal.timeout(120_000)
+  const combined = AbortSignal.any([signal, timeout])
+  const response = await fetch(apiUrl('/api/search/answer/stream'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify(body),
+    signal: combined,
+  })
+  if (!response.ok)
+    throw new ApiError(errorMessage(await response.json().catch(() => null)), response.status)
+  if (!response.body) throw new ApiError('The answer stream is unavailable.', 502)
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let final: SearchAnswer | null = null
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      buffer += decoder.decode(value, { stream: !done })
+      buffer = buffer.replaceAll('\r\n', '\n')
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary !== -1) {
+        const frame = buffer.slice(0, boundary)
+        buffer = buffer.slice(boundary + 2)
+        boundary = buffer.indexOf('\n\n')
+        const event = /^event: (.+)$/m.exec(frame)?.[1]?.trim()
+        const data = frame
+          .split('\n')
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart())
+          .join('\n')
+        if (!event || !data) continue
+        const payload = JSON.parse(data)
+        if (
+          event === 'delta' &&
+          typeof payload.text === 'string' &&
+          Array.isArray(payload.claims) &&
+          Array.isArray(payload.citations)
+        )
+          handlers.onDelta({
+            answer: payload.text,
+            claims: payload.claims,
+            citations: payload.citations,
+          })
+        else if (
+          event === 'answer' &&
+          ['generated', 'unavailable', 'insufficient_evidence'].includes(payload.status) &&
+          Array.isArray(payload.citations)
+        )
+          final = payload as SearchAnswer
+        else if (event === 'error')
+          throw new ApiError(String(payload.detail ?? 'The answer stream failed.'), 502)
+      }
+      if (done) break
+      if (buffer.length > 1_000_000)
+        throw new ApiError('The answer exceeded the response size limit.', 502)
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined)
+  }
+  if (!final)
+    throw new ApiError('The answer stream ended early. Your scene results remain available.', 502)
+  return final
 }

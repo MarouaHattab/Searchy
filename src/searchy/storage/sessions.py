@@ -47,6 +47,22 @@ class SearchSessions:
         data = json.loads(row["data"])
         if row["fingerprint"] != self._fingerprint(data["response"]):
             raise SearchyError("Search evidence changed or expired; run this search again", 409)
+        if data.get("answer"):
+            try:
+                current = self._fingerprint(
+                    {
+                        "results": [
+                            {"scene_id": identifier}
+                            for identifier in sorted(
+                                {e["scene_id"] for e in data["answer"].get("evidence", [])}
+                            )
+                        ]
+                    }
+                )
+                if current != data.get("answer_fingerprint"):
+                    data["answer"] = None
+            except SearchyError:
+                data["answer"] = None
         from searchy.retrieval.search import playback
 
         for result in data["response"].get("results", []):
@@ -60,6 +76,14 @@ class SearchSessions:
     def save_answer(self, identifier, answer):
         data = self.get(identifier)
         data["answer"] = answer
+        data["answer_fingerprint"] = self._fingerprint(
+            {
+                "results": [
+                    {"scene_id": value}
+                    for value in sorted({e["scene_id"] for e in answer.get("evidence", [])})
+                ]
+            }
+        )
         with self.metadata.connect() as db:
             db.execute(
                 "UPDATE search_sessions SET data=? WHERE id=?", (json.dumps(data), identifier)

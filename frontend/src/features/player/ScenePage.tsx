@@ -5,18 +5,18 @@ import {
   ArrowRight,
   Captions,
   Check,
-  ChevronRight,
   FileText,
   Info,
   Play,
   RotateCcw,
 } from 'lucide-react'
-import { Link, useParams, useSearchParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { Badge, Button, ErrorState, Loading } from '../../components/ui'
 import { api, apiUrl, subtitleUrl, thumbnailUrl } from '../../services/api'
 import { episodeTitle, sceneTitle, timestamp } from '../../lib/format'
 import type { Dialogue } from '../../types'
 import { SceneInformation, SceneSidebar } from './SceneDetails'
+import { readOrigin, rankingPosition, sceneHref, safeOrigin } from './navigation'
 
 export function initialPlaybackOffset(
   requestedTime: number | null,
@@ -40,7 +40,31 @@ export function initialPlaybackOffset(
 export default function ScenePage() {
   const { id = '' } = useParams()
   const [params] = useSearchParams()
+  const navigate = useNavigate()
   const requestedTime = params.has('t') ? Number(params.get('t')) : null
+  const from = safeOrigin(params.get('from'))
+  const remembered = readOrigin(from)
+  const sid = from ? new URLSearchParams(from.split('?')[1]).get('sid') : null
+  const session = useQuery({
+    queryKey: ['search-session', sid],
+    queryFn: ({ signal }) => api.session(sid!, signal),
+    enabled: !!sid && !remembered,
+    retry: false,
+    staleTime: Infinity,
+  })
+  const origin =
+    remembered ??
+    (from && session.data
+      ? {
+          href: from,
+          query: session.data.request.query,
+          sceneIds: session.data.response.results.map((s) => s.scene_id),
+          scroll: 0,
+          tab: 'scenes' as const,
+          at: Date.now(),
+        }
+      : null)
+  const ranking = rankingPosition(origin, id)
   const scene = useQuery({
     queryKey: ['scene', id],
     queryFn: ({ signal }) => api.scene(id, signal),
@@ -51,6 +75,7 @@ export default function ScenePage() {
     enabled: !!scene.data,
   })
   const player = useRef<HTMLVideoElement>(null)
+  const applied = useRef('')
   const [duration, setDuration] = useState(0)
   const [current, setCurrent] = useState(0)
   const [sceneOnly, setSceneOnly] = useState(true)
@@ -65,15 +90,34 @@ export default function ScenePage() {
     setCurrent(0)
   }, [id, requestedTime])
 
-  if (scene.isPending) return <Loading label="Loading scene…" />
+  useEffect(() => {
+    window.scrollTo(0, 0)
+    const handle = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && from) navigate(from)
+    }
+    window.addEventListener('keydown', handle)
+    return () => window.removeEventListener('keydown', handle)
+  }, [id, from, navigate])
+
+  const backLink = (
+    <Link className="back-link" to={from ?? '/search'}>
+      <ArrowLeft size={15} />
+      Back to results
+    </Link>
+  )
+  if (scene.isPending)
+    return (
+      <div>
+        {backLink}
+        <Loading label="Loading scene…" />
+      </div>
+    )
   if (scene.isError)
     return (
-      <ErrorState
-        error={scene.error}
-        retry={() => {
-          void scene.refetch()
-        }}
-      />
+      <div>
+        {backLink}
+        <ErrorState error={scene.error} retry={() => void scene.refetch()} />
+      </div>
     )
   const data = scene.data
   const start = data.playback.start_offset ?? 0
@@ -101,14 +145,51 @@ export default function ScenePage() {
     return line.start - (data.start ?? 0) + start
   }
 
+  function backToResults() {
+    navigate(origin?.href ?? from ?? '/search')
+  }
+
   return (
     <div className="scene-page">
-      <Link className="back-link" to={`/library/${data.video_id}`}>
-        <ArrowLeft size={15} />
-        {videoInfo.data?.title || episodeTitle(data.episode_id)}
-        <ChevronRight size={13} />
-        <span>Scene</span>
-      </Link>
+      <div className="scene-nav">
+        {origin ? (
+          <button className="back-link" onClick={backToResults}>
+            <ArrowLeft size={15} />
+            Back to results
+            <span className="scene-nav-query">“{origin.query}”</span>
+          </button>
+        ) : (
+          <Link className="back-link" to={from ?? '/search'}>
+            <ArrowLeft size={15} />
+            Back to results
+          </Link>
+        )}
+        {ranking && (
+          <div className="scene-nav-steps" aria-label="Result navigation">
+            <button
+              className="icon-button"
+              aria-label="Previous result"
+              disabled={!ranking.previous}
+              onClick={() =>
+                ranking.previous && navigate(sceneHref(ranking.previous, null, origin?.href))
+              }
+            >
+              <ArrowLeft size={16} />
+            </button>
+            <span className="scene-nav-count" aria-live="polite">
+              {ranking.position} of {ranking.total}
+            </span>
+            <button
+              className="icon-button"
+              aria-label="Next result"
+              disabled={!ranking.next}
+              onClick={() => ranking.next && navigate(sceneHref(ranking.next, null, origin?.href))}
+            >
+              <ArrowRight size={16} />
+            </button>
+          </div>
+        )}
+      </div>
       <div className="scene-page-heading">
         <div>
           <p className="eyebrow">
@@ -144,19 +225,21 @@ export default function ScenePage() {
                   poster={thumbnailUrl(id)}
                   crossOrigin="anonymous"
                   aria-label={`Scene from ${episodeTitle(data.episode_id)}`}
-                  onLoadedMetadata={() => {
-                    if (player.current) {
-                      setDuration(player.current.duration)
-                      const offset = initialPlaybackOffset(
-                        requestedTime,
-                        data.start,
-                        data.end,
-                        start,
-                        player.current.duration
-                      )
-                      player.current.currentTime = offset
-                      setCurrent(offset)
-                    }
+                  onLoadedMetadata={(event) => {
+                    const element = event.currentTarget
+                    setDuration(element.duration)
+                    const stamp = `${id}:${requestedTime ?? ''}`
+                    if (applied.current === stamp) return
+                    applied.current = stamp
+                    const offset = initialPlaybackOffset(
+                      requestedTime,
+                      data.start,
+                      data.end,
+                      start,
+                      element.duration
+                    )
+                    element.currentTime = offset
+                    setCurrent(offset)
                   }}
                   onTimeUpdate={() => {
                     const element = player.current

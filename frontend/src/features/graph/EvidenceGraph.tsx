@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
 import {
   Background,
   Controls,
@@ -23,9 +22,9 @@ import {
   Users,
   X,
 } from 'lucide-react'
-import { Link } from 'react-router'
-import { Button, EmptyState, ErrorState, Loading } from '../../components/ui'
-import { api } from '../../services/api'
+import { Link, useNavigate } from 'react-router'
+import { Button, EmptyState, Loading } from '../../components/ui'
+import { sceneHref } from '../player/navigation'
 import { episodeTitle, timestamp } from '../../lib/format'
 import type {
   EvidenceEdge,
@@ -112,25 +111,50 @@ function layout(nodes: EvidenceNode[]): GraphNode[] {
   })
 }
 
+function savedGraph(key: string): {
+  hidden?: string[]
+  hiddenEdges?: string[]
+  selected?: string
+  positions?: Record<string, { x: number; y: number }>
+  viewport?: { x: number; y: number; zoom: number }
+} {
+  try {
+    return JSON.parse(sessionStorage.getItem(`searchy:graph:${key}`) ?? '{}')
+  } catch {
+    return {}
+  }
+}
+
 function GraphCanvas({
   graph,
   scenes,
   onSelection,
+  stateKey,
+  origin,
+  onOpen,
+  focusSceneId,
 }: {
+  stateKey: string
+  origin: string
+  onOpen: () => void
+  focusSceneId: string | null
   graph: GraphData
   scenes: SceneMatch[]
   onSelection: (ids: string[]) => void
 }) {
   const flow = useReactFlow()
-  const [hidden, setHidden] = useState<string[]>([
-    'Observation',
-    'Dialogue',
-    'Object',
-    'Clothing',
-    'Action',
-  ])
-  const [hiddenEdges, setHiddenEdges] = useState<string[]>([])
-  const [selected, setSelected] = useState<EvidenceNode | EvidenceEdge | null>(null)
+  const navigate = useNavigate()
+  const saved = useMemo(() => savedGraph(stateKey), [stateKey])
+  const [hidden, setHidden] = useState<string[]>(
+    saved.hidden ?? ['Observation', 'Dialogue', 'Object', 'Clothing', 'Action']
+  )
+  const [hiddenEdges, setHiddenEdges] = useState<string[]>(saved.hiddenEdges ?? [])
+  const [selected, setSelected] = useState<EvidenceNode | EvidenceEdge | null>(
+    () =>
+      [...graph.nodes, ...graph.edges].find(
+        (n) => n.id === (focusSceneId ? `Scene:${focusSceneId}` : saved.selected)
+      ) ?? null
+  )
   const types = useMemo(() => [...new Set(graph.nodes.map((node) => node.type))].sort(), [graph])
   const relationshipTypes = useMemo(
     () => [...new Set(graph.edges.map((edge) => edge.type))].sort(),
@@ -142,8 +166,29 @@ function GraphCanvas({
   )
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphNode>(layout(visible))
   useEffect(() => {
-    setNodes(layout(visible))
-  }, [visible, setNodes])
+    setNodes(
+      layout(visible).map((node) => ({
+        ...node,
+        position: saved.positions?.[node.id] ?? node.position,
+      }))
+    )
+  }, [visible, setNodes, saved])
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        `searchy:graph:${stateKey}`,
+        JSON.stringify({
+          ...savedGraph(stateKey),
+          hidden,
+          hiddenEdges,
+          selected: selected?.id,
+          positions: Object.fromEntries(nodes.map((n) => [n.id, n.position])),
+        })
+      )
+    } catch {
+      /* Graph exploration still works when storage is unavailable. */
+    }
+  }, [stateKey, hidden, hiddenEdges, selected, nodes])
   const edges = useMemo(() => {
     const ids = new Set(visible.map((node) => node.id))
     return graph.edges
@@ -227,7 +272,24 @@ function GraphCanvas({
             edges={edges}
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
-            onNodeClick={(_, node) => select(node.data.record)}
+            onNodeClick={(_, node) => {
+              select(node.data.record)
+              if (node.data.record.type === 'Scene') {
+                onOpen()
+                navigate(sceneHref(node.data.record.scene_ids[0], node.data.record.start, origin))
+              }
+            }}
+            defaultViewport={saved.viewport}
+            onMoveEnd={(_, viewport) => {
+              try {
+                sessionStorage.setItem(
+                  `searchy:graph:${stateKey}`,
+                  JSON.stringify({ ...savedGraph(stateKey), viewport })
+                )
+              } catch {
+                /* Optional browser storage. */
+              }
+            }}
             onEdgeClick={(_, edge) => {
               const item = graph.edges.find((candidate) => candidate.id === edge.id)
               if (item) select(item)
@@ -236,7 +298,7 @@ function GraphCanvas({
               setSelected(null)
               onSelection([])
             }}
-            fitView
+            fitView={!saved.viewport}
             minZoom={0.1}
             maxZoom={1.7}
             nodesConnectable={false}
@@ -301,7 +363,12 @@ function GraphCanvas({
               {selected.scene_ids.map((id) => {
                 const scene = scenes.find((item) => item.scene_id === id)
                 return (
-                  <Link className="evidence-scene-link" key={id} to={`/scenes/${id}`}>
+                  <Link
+                    className="evidence-scene-link"
+                    key={id}
+                    to={sceneHref(id, scene?.start ?? null, origin)}
+                    onClick={onOpen}
+                  >
                     <Film size={14} />
                     <span>
                       {episodeTitle(scene?.episode_id ?? null)}
@@ -347,70 +414,47 @@ function GraphCanvas({
 
 export default function EvidenceGraph({
   scenes,
-  collection,
+  answerGraph,
+  stateKey,
+  origin,
+  onOpen,
   focusSceneId,
   onSelection,
 }: {
   scenes: SceneMatch[]
+  answerGraph?: GraphData
+  stateKey: string
+  origin: string
+  onOpen: () => void
   collection: string
   focusSceneId: string | null
   onSelection: (ids: string[]) => void
 }) {
-  const [count, setCount] = useState(4)
-  const [focused, setFocused] = useState(false)
-  useEffect(() => {
-    setCount(4)
-    setFocused(false)
-  }, [scenes])
-  const sceneIds =
-    focused && focusSceneId ? [focusSceneId] : scenes.slice(0, count).map((scene) => scene.scene_id)
-  const graph = useQuery({
-    queryKey: ['evidence-graph', sceneIds, collection],
-    queryFn: ({ signal }) =>
-      api.graph({ scene_ids: sceneIds, collection_id: collection || undefined }, signal),
-    enabled: sceneIds.length > 0,
-    retry: false,
-    staleTime: 60_000,
-  })
-  if (!sceneIds.length)
+  if (!answerGraph) return <Loading label="Preparing the answer’s evidence graph…" />
+  if (!answerGraph.nodes.length)
     return (
-      <EmptyState title="No scene evidence to explore">
-        Search for a moment to build its graph.
+      <EmptyState title="Graph evidence is unavailable">
+        The scene results and their recorded evidence are still available.
       </EmptyState>
     )
   return (
     <div className="graph-workspace">
-      <div className="graph-context">
-        <p className="muted small">
-          Indexed relationships for {sceneIds.length} of {scenes.length} matches. Extracted
-          observations may be uncertain.
-        </p>
-        <div>
-          {focusSceneId && (
-            <Button variant="secondary" onClick={() => setFocused(!focused)}>
-              {focused ? 'Show result graph' : 'Focus selected scene'}
-            </Button>
-          )}
-          {!focused && count < Math.min(12, scenes.length) && (
-            <Button variant="secondary" onClick={() => setCount(Math.min(12, count + 4))}>
-              Explore more matches
-            </Button>
-          )}
-        </div>
-      </div>
-      {graph.isPending ? (
-        <Loading label="Loading indexed relationships…" />
-      ) : graph.isError ? (
-        <ErrorState error={graph.error} retry={() => void graph.refetch()} />
-      ) : !graph.data.nodes.length ? (
-        <EmptyState title="No indexed relationships found">
-          The scene details and search evidence remain available.
-        </EmptyState>
-      ) : (
-        <ReactFlowProvider>
-          <GraphCanvas graph={graph.data} scenes={scenes} onSelection={onSelection} />
-        </ReactFlowProvider>
-      )}
+      <p className="muted small">
+        The indexed graph context supplied to answer generation and verification. Connections do not
+        imply causality.
+      </p>
+      <ReactFlowProvider>
+        <GraphCanvas
+          key={stateKey}
+          graph={answerGraph}
+          scenes={scenes}
+          stateKey={stateKey}
+          origin={origin}
+          onOpen={onOpen}
+          focusSceneId={focusSceneId}
+          onSelection={onSelection}
+        />
+      </ReactFlowProvider>
     </div>
   )
 }
