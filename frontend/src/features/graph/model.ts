@@ -17,19 +17,31 @@ export const singularLabels: Record<string, string> = {
   Location: 'Place',
   Action: 'Activity',
   Clothing: 'Outfit',
+  Object: 'Object',
+  Scene: 'Scene',
+  Dialogue: 'Dialogue',
+  Observation: 'Observation',
 }
 export const entityLabel = (type: string) => singularLabels[type] ?? type
-export const overviewHidden = ['Episode', 'Video', 'Observation', 'Dialogue', 'Action', 'Clothing']
+export const overviewHidden = ['Episode', 'Video', 'Observation', 'Dialogue']
 const labels: Record<string, string> = {
   APPEARS_IN: 'Appears in',
-  HAS_OBSERVATION: 'Has observation',
-  HAS_DIALOGUE: 'Has dialogue',
+  HAS_OBSERVATION: 'Observed',
+  HAS_DIALOGUE: 'Dialogue',
   DESCRIBES: 'Describes',
-  SUBJECT: 'Observed person',
+  SUBJECT: 'About',
   SPOKEN_BY: 'Spoken by',
   CONTAINS: 'Contains',
   OCCURS_AT: 'Takes place at',
   PART_OF: 'Part of',
+  WEARS: 'Wears',
+  PERFORMS: 'Performs',
+  INTERACTS_WITH: 'Interacts with',
+  LOCATED_IN: 'At',
+  WITH: 'With',
+  INCLUDES: 'Includes',
+  SPEAKS: 'Speaks',
+  OCCURS_BEFORE: 'Then',
 }
 export const relationshipLabel = (type: string) =>
   labels[type] ?? type.replaceAll('_', ' ').toLowerCase()
@@ -84,7 +96,10 @@ export function visibleGraph(
 ) {
   const scoped = new Set(sceneIds)
   const nodes = graph.nodes.filter(
-    (n) => n.scene_ids.some((s) => scoped.has(s)) && !hidden.includes(n.type)
+    (n) =>
+      n.scene_ids.some((s) => scoped.has(s)) &&
+      !hidden.includes(n.type) &&
+      (n.type !== 'Action' || n.label.length < 90)
   )
   const ids = new Set(nodes.map((n) => n.id))
   const edges = graph.edges.filter(
@@ -105,6 +120,140 @@ export function visibleGraph(
   }
 }
 
+const summaryRelation: Record<string, string> = {
+  clothing: 'WEARS',
+  action: 'PERFORMS',
+  interaction: 'INTERACTS_WITH',
+  location: 'LOCATED_IN',
+  object: 'WITH',
+}
+
+/** Readable links summarized from indexed observation and dialogue paths. */
+export function summarizeGraph(graph: EvidenceGraph): EvidenceGraph {
+  const nodes = graph.nodes
+  const byId = new Map(nodes.map((node) => [node.id, node]))
+  const edges = [...graph.edges]
+
+  function add(edge: EvidenceEdge) {
+    const key = `${edge.source}|${edge.type}|${edge.target}`
+    if (edge.source === edge.target || !byId.has(edge.source) || !byId.has(edge.target)) return
+    const index = edges.findIndex((item) => `${item.source}|${item.type}|${item.target}` === key)
+    if (index >= 0) {
+      const current = edges[index]
+      if (!current.derived) return
+      edges[index] = {
+        ...current,
+        scene_ids: [...new Set([...current.scene_ids, ...edge.scene_ids])],
+        evidence: [...new Set([...current.evidence, ...edge.evidence])].slice(0, 4),
+      }
+      return
+    }
+    edges.push(edge)
+  }
+
+  for (const observation of nodes) {
+    if (observation.type !== 'Observation') continue
+    const kind = String(observation.properties.kind ?? '')
+    const relation = summaryRelation[kind]
+    if (!relation) continue
+    const outgoing = graph.edges.filter((edge) => edge.source === observation.id)
+    const subjects = outgoing.filter((edge) => edge.type === 'SUBJECT').map((edge) => edge.target)
+    const described = outgoing
+      .filter((edge) => edge.type === 'DESCRIBES')
+      .map((edge) => edge.target)
+    for (const subject of subjects) {
+      for (const target of described) {
+        const targetNode = byId.get(target)
+        add({
+          id: `summary:${observation.id}:${subject}:${target}`,
+          source: subject,
+          target,
+          type: targetNode?.type === 'Character' ? 'INTERACTS_WITH' : relation,
+          scene_ids: observation.scene_ids,
+          evidence: observation.evidence,
+          derived: true,
+        })
+      }
+    }
+    for (const target of described) {
+      for (const sceneId of observation.scene_ids) {
+        const scene = nodes.find(
+          (node) => node.type === 'Scene' && node.properties.scene_id === sceneId
+        )
+        if (!scene || subjects.length) continue
+        const existing = graph.edges.some(
+          (edge) =>
+            (edge.source === scene.id && edge.target === target) ||
+            (edge.target === scene.id && edge.source === target)
+        )
+        if (existing) continue
+        add({
+          id: `summary:${observation.id}:${scene.id}:${target}`,
+          source: scene.id,
+          target,
+          type: 'INCLUDES',
+          scene_ids: observation.scene_ids,
+          evidence: observation.evidence,
+          derived: true,
+        })
+      }
+    }
+  }
+
+  for (const dialogue of nodes) {
+    if (dialogue.type !== 'Dialogue') continue
+    const speakers = graph.edges
+      .filter((edge) => edge.source === dialogue.id && edge.type === 'SPOKEN_BY')
+      .map((edge) => edge.target)
+    for (const speaker of speakers) {
+      for (const sceneId of dialogue.scene_ids) {
+        const scene = nodes.find(
+          (node) => node.type === 'Scene' && node.properties.scene_id === sceneId
+        )
+        if (!scene) continue
+        add({
+          id: `summary:speaks:${dialogue.id}:${speaker}`,
+          source: speaker,
+          target: scene.id,
+          type: 'SPEAKS',
+          scene_ids: dialogue.scene_ids,
+          evidence: dialogue.evidence.length ? dialogue.evidence : [dialogue.label],
+          derived: true,
+        })
+      }
+    }
+  }
+
+  const scenes = nodes.filter(
+    (node) => node.type === 'Scene' && typeof node.properties.video_id === 'string'
+  )
+  const byVideo = new Map<string, EvidenceNode[]>()
+  for (const scene of scenes) {
+    const videoId = String(scene.properties.video_id)
+    byVideo.set(videoId, [...(byVideo.get(videoId) ?? []), scene])
+  }
+  for (const group of byVideo.values()) {
+    const ordered = group
+      .filter((scene) => scene.start != null)
+      .sort((a, b) => (a.start ?? 0) - (b.start ?? 0) || a.id.localeCompare(b.id))
+    for (let index = 0; index < ordered.length - 1; index += 1) {
+      const earlier = ordered[index]
+      const later = ordered[index + 1]
+      add({
+        id: `summary:before:${earlier.id}:${later.id}`,
+        source: earlier.id,
+        target: later.id,
+        type: 'OCCURS_BEFORE',
+        scene_ids: [...new Set([...earlier.scene_ids, ...later.scene_ids])],
+        evidence: [],
+        derived: true,
+      })
+    }
+  }
+
+  return { ...graph, edges }
+}
+
 export function layoutGraph(
   nodes: EvidenceNode[],
   edges: EvidenceEdge[],
@@ -115,10 +264,12 @@ export function layoutGraph(
     kind === 'Character'
       ? 0
       : kind === 'Scene'
-        ? 1
-        : ['Observation', 'Dialogue'].includes(kind)
-          ? 2
-          : 3
+        ? 2
+        : ['Action', 'Object', 'Clothing', 'Location'].includes(kind)
+          ? 1
+          : kind === 'Dialogue' || kind === 'Observation'
+            ? 3
+            : 4
   const columns = [...new Set(nodes.map((n) => columnFor(n.type)))].sort()
   const sceneRank = new Map(sceneIds.map((id, i) => [id, i]))
   const rank = (n: EvidenceNode) => {
@@ -134,20 +285,37 @@ export function layoutGraph(
   const sorted = [...nodes].sort(
     (a, b) => columnFor(a.type) - columnFor(b.type) || rank(a) - rank(b) || a.id.localeCompare(b.id)
   )
-  const counts = new Map<number, number>()
+  const rowsPerColumn = 3
+  const grouped = new Map<number, EvidenceNode[]>()
+  for (const record of sorted) {
+    const column = columnFor(record.type)
+    grouped.set(column, [...(grouped.get(column) ?? []), record])
+  }
+  const bandWidth = 188
+  let cursor = 0
+  const origin = new Map<number, number>()
+  for (const column of columns) {
+    origin.set(column, cursor)
+    const bands = Math.max(1, Math.ceil((grouped.get(column)?.length ?? 0) / rowsPerColumn))
+    cursor += bands * bandWidth + 20
+  }
   const occupied = nodes.flatMap((node) => (positions[node.id] ? [positions[node.id]] : []))
+  const placed = new Map<string, number>()
   return sorted.map((record) => {
     const column = columnFor(record.type)
-    const row = counts.get(column) ?? 0
-    counts.set(column, row + 1)
-    const position = positions[record.id] ?? { x: columns.indexOf(column) * 272, y: row * 144 }
+    const index = placed.get(String(column)) ?? 0
+    placed.set(String(column), index + 1)
+    const position = positions[record.id] ?? {
+      x: (origin.get(column) ?? 0) + Math.floor(index / rowsPerColumn) * bandWidth,
+      y: (index % rowsPerColumn) * 120,
+    }
     if (!positions[record.id]) {
       while (
         occupied.some(
-          (other) => Math.abs(other.x - position.x) < 240 && Math.abs(other.y - position.y) < 136
+          (other) => Math.abs(other.x - position.x) < 160 && Math.abs(other.y - position.y) < 110
         )
       )
-        position.y += 144
+        position.y += 120
       occupied.push(position)
     }
     return {
@@ -180,10 +348,10 @@ export function readGraphState(key: string): GraphPreferences {
     selected: null,
     focusedScene: null,
     positions: {},
-    labels: false,
+    labels: true,
   }
   try {
-    const data = JSON.parse(sessionStorage.getItem(`searchy:graph-v2:${key}`) ?? 'null')
+    const data = JSON.parse(sessionStorage.getItem(`searchy:graph-v4:${key}`) ?? 'null')
     if (
       !data ||
       !Array.isArray(data.hidden) ||
@@ -203,7 +371,7 @@ export function readGraphState(key: string): GraphPreferences {
 }
 export function saveGraphState(key: string, state: GraphPreferences) {
   try {
-    sessionStorage.setItem(`searchy:graph-v2:${key}`, JSON.stringify(state))
+    sessionStorage.setItem(`searchy:graph-v4:${key}`, JSON.stringify(state))
   } catch {
     /* Exploration remains usable without browser storage. */
   }

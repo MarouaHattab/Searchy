@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import {
   Background,
@@ -13,6 +13,7 @@ import {
   type NodeProps,
 } from '@xyflow/react'
 import {
+  Box,
   Film,
   GitBranch,
   MapPin,
@@ -27,6 +28,7 @@ import {
   SlidersHorizontal,
   Users,
   X,
+  Zap,
 } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { Button, EmptyState, ErrorState, Loading } from '../../components/ui'
@@ -42,6 +44,7 @@ import {
   readGraphState,
   relationshipLabel,
   saveGraphState,
+  summarizeGraph,
   typeLabels,
   visibleGraph,
   type GraphPreferences,
@@ -56,8 +59,8 @@ const icons = {
   Character: Users,
   Observation: ScanSearch,
   Dialogue: MessageSquare,
-  Action: GitBranch,
-  Object: ScanSearch,
+  Action: Zap,
+  Object: Box,
   Location: MapPin,
   Clothing: Shirt,
 }
@@ -81,7 +84,7 @@ const EvidenceCard = memo(function EvidenceCard({ data }: NodeProps<GraphNode>) 
         <Icon size={13} />
         {entityLabel(record.type)}
       </span>
-      <strong title={excerpt(title, 300)}>{excerpt(title, 110)}</strong>
+      <strong title={excerpt(title, 300)}>{excerpt(title, 72)}</strong>
       {record.type === 'Scene' && (
         <div className="graph-card-foot">
           <span>
@@ -187,10 +190,12 @@ function GraphWorkspace({
   const extraSignature = extra.map((result) => result.dataUpdatedAt).join(',')
   const graph = useMemo(
     () =>
-      mergeGraphs([
-        ...(base ? [base] : []),
-        ...extra.flatMap((result) => (result.data ? [result.data] : [])),
-      ]),
+      summarizeGraph(
+        mergeGraphs([
+          ...(base ? [base] : []),
+          ...extra.flatMap((result) => (result.data ? [result.data] : [])),
+        ])
+      ),
     [base, extraSignature]
   )
   const view = useMemo(
@@ -217,15 +222,17 @@ function GraphWorkspace({
     },
     [onOpen, navigate, origin]
   )
+  const openRef = useRef(openScene)
+  openRef.current = openScene
   useEffect(() => {
     const saved = readGraphState(stateKey)
     setNodes(
       layoutGraph(view.nodes, view.edges, orderedIds, saved.positions).map((node) => ({
         ...node,
-        data: { ...node.data, open: openScene },
+        data: { ...node.data, open: (record: EvidenceNode) => openRef.current(record) },
       }))
     )
-  }, [view, orderedIds, setNodes, stateKey, openScene])
+  }, [view, orderedIds, setNodes, stateKey])
   useEffect(() => saveGraphState(stateKey, preferences), [stateKey, preferences])
   const selectionSignature = selected?.scene_ids.join(',') ?? ''
   useEffect(() => {
@@ -249,7 +256,7 @@ function GraphWorkspace({
   }))
   const edges = view.edges.map((edge) => ({
     ...edge,
-    type: 'default',
+    type: 'smoothstep',
     label:
       preferences.labels || edge.id === selected?.id ? relationshipLabel(edge.type) : undefined,
     ariaLabel: `${relationshipLabel(edge.type)}: ${graph.nodes.find((n) => n.id === edge.source)?.label ?? ''} to ${graph.nodes.find((n) => n.id === edge.target)?.label ?? ''}`,
@@ -299,9 +306,7 @@ function GraphWorkspace({
         data: { ...n.data, open: openScene },
       }))
     )
-    window.requestAnimationFrame(
-      () => void flow.fitView({ padding: 0.12, minZoom: 0.85, maxZoom: 1 })
-    )
+    window.requestAnimationFrame(() => void flow.fitView({ padding: 0.14, maxZoom: 1 }))
   }
   if (!base && context.isPending) return <Loading label="Loading the indexed scene evidence…" />
   if (!base && context.isError)
@@ -323,12 +328,10 @@ function GraphWorkspace({
             <GitBranch size={19} />
           </span>
           <div>
-            <h3>Scene evidence</h3>
+            <h3>Graph evidence</h3>
             <p>
-              {suppliedGraph || context.data?.used_for_answer
-                ? 'Selected graph context for this answer'
-                : 'Related indexed evidence'}{' '}
-              · {scope.length} scenes
+              People, moments, and what connects them for this search
+              {scope.length ? ` · ${scope.length} ${scope.length === 1 ? 'scene' : 'scenes'}` : ''}
             </p>
           </div>
         </div>
@@ -376,6 +379,15 @@ function GraphWorkspace({
             Labels
           </button>
         </div>
+      </div>
+      <div className="graph-legend" aria-label="Entity types in this graph">
+        {Object.entries(typeLabels)
+          .filter(([type]) => view.nodes.some((node) => node.type === type))
+          .map(([type, label]) => (
+            <span key={type} className={`graph-legend-item graph-legend-${type.toLowerCase()}`}>
+              {label}
+            </span>
+          ))}
       </div>
       {filtersOpen && (
         <div className="graph-filter-panel">
@@ -449,8 +461,8 @@ function GraphWorkspace({
             onMoveEnd={(_, viewport) => setPreferences((p) => ({ ...p, viewport }))}
             defaultViewport={preferences.viewport}
             fitView={!preferences.viewport}
-            fitViewOptions={{ padding: 0.12, minZoom: 0.85, maxZoom: 1 }}
-            minZoom={0.2}
+            fitViewOptions={{ padding: 0.16, minZoom: 0.4, maxZoom: 1 }}
+            minZoom={0.25}
             maxZoom={1.6}
             nodesConnectable={false}
             edgesReconnectable={false}

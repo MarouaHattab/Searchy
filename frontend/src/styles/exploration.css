@@ -238,15 +238,39 @@
 }
 .graph-card {
   box-sizing: border-box;
-  width: 224px;
-  min-height: 86px;
-  padding: 13px 15px;
+  width: 168px;
+  min-height: 92px;
+  padding: 12px 14px 13px;
   display: grid;
-  gap: 8px;
+  gap: 7px;
   border: 1px solid var(--line);
-  border-radius: 9px;
+  border-radius: 12px;
   background: var(--surface);
-  box-shadow: 0 2px 5px #18293b07;
+  box-shadow: 0 8px 22px #18293b0f;
+}
+.graph-card-character {
+  border-top: 3px solid #3d6fd8;
+}
+.graph-card-scene {
+  border-top: 3px solid #2f6fef;
+}
+.graph-card-action {
+  border-top: 3px solid #0f8a6a;
+}
+.graph-card-object {
+  border-top: 3px solid #b26a22;
+}
+.graph-card-clothing {
+  border-top: 3px solid #6d5efc;
+}
+.graph-card-location {
+  border-top: 3px solid #0e7c86;
+}
+.graph-card-dialogue,
+.graph-card-observation,
+.graph-card-episode,
+.graph-card-video {
+  border-top: 3px solid #8b95a7;
 }
 .graph-card-kind {
   display: flex;
@@ -264,13 +288,13 @@
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-.graph-card-scene {
-  border-color: #92a8de;
-  border-left: 3px solid var(--accent);
-}
 .graph-card-scene .graph-card-kind,
-.graph-card-character .graph-card-kind {
-  color: var(--accent);
+.graph-card-character .graph-card-kind,
+.graph-card-action .graph-card-kind,
+.graph-card-object .graph-card-kind,
+.graph-card-clothing .graph-card-kind,
+.graph-card-location .graph-card-kind {
+  color: var(--text);
 }
 .graph-card-observation,
 .graph-card-dialogue {
@@ -297,6 +321,45 @@
 }
 .react-flow__node.selected .graph-card {
   box-shadow: 0 0 0 2px var(--accent);
+}
+.graph-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 10px 20px 0;
+  background: var(--surface);
+}
+.graph-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.graph-legend-item::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 99px;
+  background: var(--accent);
+}
+.graph-legend-character::before {
+  background: #3d6fd8;
+}
+.graph-legend-scene::before {
+  background: #2f6fef;
+}
+.graph-legend-action::before {
+  background: #0f8a6a;
+}
+.graph-legend-object::before {
+  background: #b26a22;
+}
+.graph-legend-clothing::before {
+  background: #6d5efc;
+}
+.graph-legend-location::before {
+  background: #0e7c86;
 }
 .react-flow__handle {
   opacity: 0;

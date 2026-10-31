@@ -5,6 +5,18 @@ import { sceneHref } from '../player/navigation'
 import { relationshipLabel, entityLabel } from './model'
 import type { EvidenceEdge, EvidenceNode, SceneMatch } from '../../types'
 
+const explanations: Record<string, string> = {
+  Character: 'A person linked to these scenes by appearance, speech, or an observation.',
+  Scene: 'A moment from the indexed video. Play opens this timestamp.',
+  Action: 'An activity recorded in a scene observation.',
+  Clothing: 'An outfit recorded for a person in a scene.',
+  Object: 'An object recorded in a scene.',
+  Location: 'A place recorded for a scene.',
+  Dialogue: 'A spoken line from the indexed transcript.',
+  Observation: 'A recorded visual or scene observation.',
+}
+const nodeExplanation = (type: string) => explanations[type] ?? ''
+
 export function EvidenceInspector({
   selected,
   nodes,
@@ -36,10 +48,8 @@ export function EvidenceInspector({
         <div className="graph-inspector-empty">
           <ScanSearch size={28} strokeWidth={1.4} />
           <h3>Explore a connection</h3>
-          <p>Select a person, scene, or connection to see its source evidence.</p>
-          <p className="small muted">
-            Play opens a scene. Expand adds recorded observations and dialogue.
-          </p>
+          <p>Select a person, scene, or connection to see the indexed evidence behind it.</p>
+          <p className="small muted">Play opens that moment. Expand adds more recorded detail.</p>
         </div>
       </aside>
     )
@@ -61,6 +71,9 @@ export function EvidenceInspector({
         </button>
       </header>
       <h3>{title}</h3>
+      {node && nodeExplanation(node.type) && (
+        <p className="graph-source-label">{nodeExplanation(node.type)}</p>
+      )}
       <p className="graph-source-label">
         {inContext ? 'Selected answer context' : 'Additional indexed evidence'}
       </p>
@@ -75,6 +88,12 @@ export function EvidenceInspector({
           <span>{relationshipLabel(edge.type)}</span>
           <span>{excerpt(nodes.find((n) => n.id === edge.target)?.label ?? 'Target', 80)}</span>
         </div>
+      )}
+      {edge?.derived && (
+        <p className="graph-source-label">
+          Summarized from indexed observations in these scenes. The times and quotes below are the
+          source.
+        </p>
       )}
       {node?.start != null && (
         <p className="graph-time">
