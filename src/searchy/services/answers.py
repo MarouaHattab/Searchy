@@ -29,6 +29,70 @@ MAX_DESCRIPTION = 900
 MAX_EVIDENCE_PER_SCENE = 8
 MAX_CONTEXT_CHARS = 42000
 
+_LINK_RELATIONS = {
+    "clothing": "wears",
+    "action": "performs",
+    "interaction": "interacts with",
+    "object": "with",
+    "location": "located in",
+}
+
+
+def _scene_relationships(graph: dict) -> list[dict]:
+    grouped: dict[str, dict] = {}
+    for node in graph.get("nodes", []):
+        if node["type"] not in {"Character", "Clothing", "Action", "Object", "Location"}:
+            continue
+        for scene_id in node["scene_ids"]:
+            bucket = grouped.setdefault(
+                scene_id, {"scene_id": scene_id, "characters": [], "entities": {}}
+            )
+            if node["type"] == "Character":
+                if node["label"] not in bucket["characters"] and len(bucket["characters"]) < 8:
+                    bucket["characters"].append(node["label"])
+                continue
+            names = bucket["entities"].setdefault(node["type"], [])
+            if node["label"] not in names and len(names) < 6:
+                names.append(node["label"])
+    return [grouped[key] for key in sorted(grouped)]
+
+
+def _grounded_links(graph: dict) -> list[dict]:
+    nodes = {node["id"]: node for node in graph.get("nodes", [])}
+    links = []
+    for observation in nodes.values():
+        if observation["type"] != "Observation":
+            continue
+        relation = _LINK_RELATIONS.get(observation.get("properties", {}).get("kind") or "")
+        if not relation:
+            continue
+        outgoing = [edge for edge in graph.get("edges", []) if edge["source"] == observation["id"]]
+        subjects = [edge["target"] for edge in outgoing if edge["type"] == "SUBJECT"]
+        described = [edge["target"] for edge in outgoing if edge["type"] == "DESCRIBES"]
+        for subject in subjects:
+            source = nodes.get(subject)
+            if source is None:
+                continue
+            for target in described:
+                dest = nodes.get(target)
+                if dest is None:
+                    continue
+                links.append(
+                    {
+                        "relation": "interacts with" if dest["type"] == "Character" else relation,
+                        "source": source["label"],
+                        "target": dest["label"],
+                        "scene_ids": observation["scene_ids"],
+                        "evidence": (observation.get("evidence") or [])[:1],
+                        "start": observation.get("start"),
+                        "end": observation.get("end"),
+                        "verified": observation.get("verified"),
+                    }
+                )
+                if len(links) >= 24:
+                    return links
+    return links
+
 
 class AnswerService:
     def __init__(
@@ -116,10 +180,12 @@ class AnswerService:
             return response, {}, scenes
         if plan.temporal and self.graph is not None and include_graph:
             try:
-                neighbors = self.graph.neighbors([s.scene_id for s in scenes[:4]], collection_id)
+                rows = self.graph.timeline([s.scene_id for s in scenes[:4]], collection_id)
                 videos = {s.video_id for s in scenes}
-                for identifier in neighbors:
-                    if len(scenes) >= 12 or identifier in {s.scene_id for s in scenes}:
+                seen = {s.scene_id for s in scenes}
+                for row in rows:
+                    identifier = row["scene_id"]
+                    if len(scenes) >= 12 or identifier in seen:
                         continue
                     nearby = self.metadata.get_scene(identifier)
                     if (
@@ -128,6 +194,8 @@ class AnswerService:
                         or not self.metadata.is_indexed(identifier)
                     ):
                         continue
+                    seen.add(identifier)
+                    direction = "preceding" if row["direction"] == "before" else "following"
                     scenes.append(nearby)
                     blocks.append(
                         {
@@ -137,12 +205,14 @@ class AnswerService:
                             "end": nearby.end,
                             "timestamp_basis": nearby.timestamp_basis,
                             "missing_terms": [],
-                            "role": "adjacent episode timeline context; not an independent query match",
+                            "role": (
+                                f"{direction} scene in the same video; not an independent query match"
+                            ),
                         }
                     )
                     response["evidence"].extend(self._select_evidence(nearby, query, None)[:3])
                 response["warnings"].append(
-                    "Timeline context follows episode timestamps, not necessarily story chronology."
+                    "Timeline context follows timestamps in the same video, not story chronology."
                 )
             except SearchyError:
                 response["warnings"].append("Adjacent timeline evidence is unavailable.")
@@ -192,6 +262,8 @@ class AnswerService:
             }
         ]
         graph = response["graph"]
+        response["relationships"] = _scene_relationships(graph)
+        grounded_links = _grounded_links(graph)
 
         def selected_graph():
             selected_ids = set()
@@ -254,6 +326,8 @@ class AnswerService:
             "scenes": blocks,
             "evidence": response["evidence"],
             "graph": compact_graph(selected_graph()),
+            "relationships": response["relationships"],
+            "grounded_links": grounded_links,
             "limitations": response["warnings"],
         }
         while len(json.dumps(context)) > MAX_CONTEXT_CHARS and len(response["evidence"]) > 1:

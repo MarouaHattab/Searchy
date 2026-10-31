@@ -577,6 +577,8 @@ class SearchEngine:
             )
             if association_unverified or speaker_unverified or timing == "unverified":
                 score -= 0.15
+            if "graph" in matched_channels[scene_id] and len(matched_channels[scene_id]) > 1:
+                score += 0.08
             results.append(
                 {
                     "scene_id": scene.scene_id,

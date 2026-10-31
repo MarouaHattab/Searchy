@@ -132,7 +132,15 @@ MERGE (d)-[:SPOKEN_BY]->(c)
 _SEARCH = """
 MATCH (s:Scene)
 WHERE ($collection_id IS NULL OR s.collection_id = $collection_id)
-  AND all(term IN $terms WHERE term IN s.terms)
+  AND all(group IN $term_groups WHERE any(term IN group WHERE
+      any(token IN coalesce(s.terms, []) WHERE token = term
+          OR (size(term) >= 4 AND size(token) >= 4 AND (token STARTS WITH term OR term STARTS WITH token)))
+      OR EXISTS {
+          MATCH (s)-[:HAS_OBSERVATION]->(:Observation)-[:DESCRIBES]->(entity)
+          WHERE any(token IN split(toLower(replace(coalesce(entity.name, ''), '-', ' ')), ' ')
+              WHERE token = term
+              OR (size(term) >= 4 AND size(token) >= 4 AND (token STARTS WITH term OR term STARTS WITH token)))
+      }))
   AND all(identifier IN $character_ids WHERE
       EXISTS { MATCH (:Character {key: identifier})-[:APPEARS_IN]->(s) }
       OR EXISTS { MATCH (s)-[:HAS_DIALOGUE]->(:Dialogue)-[:SPOKEN_BY]->(:Character {key: identifier}) })
@@ -145,19 +153,46 @@ WHERE all(name IN $characters WHERE
     any(actual IN characters WHERE actual = name OR actual STARTS WITH name + ' '))
 OPTIONAL MATCH (s)-[:HAS_OBSERVATION]->(o:Observation)
 WITH s, collect(DISTINCT CASE WHEN
-    any(term IN $terms WHERE toLower(o.value + ' ' + o.evidence) CONTAINS term)
+    any(group IN $term_groups WHERE any(term IN group WHERE
+        toLower(o.value + ' ' + o.evidence) CONTAINS term))
     OR toLower(o.value) IN $characters OR toLower(o.subject) IN $characters
     THEN o.evidence ELSE null END) AS observations
 OPTIONAL MATCH (s)-[:HAS_DIALOGUE]->(d:Dialogue)
 WITH s, observations, collect(DISTINCT CASE WHEN
-    any(term IN $terms WHERE toLower(d.text) CONTAINS term)
+    any(group IN $term_groups WHERE any(term IN group WHERE toLower(d.text) CONTAINS term))
     OR any(name IN $characters WHERE toLower(d.speaker) = name
         OR toLower(d.speaker) STARTS WITH name + ' ')
     THEN d.text ELSE null END) AS dialogue
+OPTIONAL MATCH (requested:Character)
+WHERE requested.key IN $character_ids OR requested.normalized IN $characters
+WITH s, observations, dialogue, collect(DISTINCT requested.normalized) AS requested_names
+OPTIONAL MATCH (s)-[:HAS_OBSERVATION]->(:Observation)-[:DESCRIBES]->(entity)
+WHERE entity.name IS NOT NULL AND size(entity.name) <= 160
+WITH s, observations, dialogue, requested_names, collect(DISTINCT toLower(entity.name)) AS entity_names
+WITH s, observations, dialogue,
+    size([name IN entity_names WHERE all(group IN $term_groups WHERE any(term IN group WHERE
+        any(token IN split(replace(replace(replace(name, ':', ' '), '(', ' '), ')', ' '), ' ')
+            WHERE token = term OR (size(term) >= 4 AND size(token) >= 4
+                AND (token STARTS WITH term OR term STARTS WITH token)))))]) AS focused_entities,
+    size([name IN entity_names WHERE all(group IN $term_groups WHERE any(term IN group WHERE
+        any(token IN split(replace(replace(replace(name, ':', ' '), '(', ' '), ')', ' '), ' ')
+            WHERE token = term OR (size(term) >= 4 AND size(token) >= 4
+                AND (token STARTS WITH term OR term STARTS WITH token)))))
+        AND any(person IN requested_names WHERE any(token IN split(person, ' ')
+            WHERE size(token) >= 4 AND name CONTAINS token))]) AS character_entities,
+    size([item IN observations WHERE item IS NOT NULL])
+        + size([item IN dialogue WHERE item IS NOT NULL]) AS evidence_hits
+WITH s, observations, dialogue, character_entities, focused_entities,
+    CASE WHEN size($term_groups) = 0 THEN 0.7
+    ELSE 0.58
+        + CASE WHEN character_entities > 0 THEN 0.24 ELSE 0 END
+        + CASE WHEN focused_entities > 0 THEN 0.12 ELSE 0 END
+        + toFloat(CASE WHEN evidence_hits > 3 THEN 3 ELSE evidence_hits END) * 0.02
+    END AS raw_score
 RETURN s.scene_id AS scene_id,
-    $score AS score,
+    CASE WHEN raw_score > 1.0 THEN 1.0 ELSE raw_score END AS score,
     CASE WHEN s.description <> '' THEN [s.description] ELSE [] END + observations + dialogue AS evidence
-ORDER BY s.scene_id
+ORDER BY score DESC, character_entities DESC, focused_entities DESC, s.scene_id
 LIMIT $limit
 """
 
@@ -208,6 +243,20 @@ def _normalized(value: str) -> str:
 
 def _tokens(value: str) -> list[str]:
     return list(dict.fromkeys(re.findall(r"\w+", value.casefold())))
+
+
+def _variants(token: str) -> list[str]:
+    forms = {token}
+    if len(token) >= 5 and token.endswith("ing"):
+        root = token[:-3]
+        forms.update({root, root + "s", root + "ed", root + "ing"})
+    elif len(token) >= 4 and token.endswith("ed"):
+        root = token[:-2]
+        forms.update({root, root + "s", root + "ing", root + "ed"})
+    elif len(token) >= 5 and token.endswith("s") and not token.endswith("ss"):
+        root = token[:-1]
+        forms.update({root, root + "ing", root + "ed"})
+    return sorted(form for form in forms if len(form) >= 3) or [token]
 
 
 class GraphStore:
@@ -444,11 +493,11 @@ class GraphStore:
             records = tx.run(
                 _SEARCH,
                 terms=terms,
+                term_groups=[_variants(term) for term in terms],
                 characters=names,
                 character_ids=character_ids or [],
                 collection_id=collection_id,
                 limit=limit,
-                score=min(1.0, 0.6 + 0.05 * (len(terms) + len(names))),
             )
             return [
                 Candidate(
@@ -508,30 +557,48 @@ class GraphStore:
                 "Neo4j context lookup failed. Check the database connection and schema"
             ) from None
 
-    def neighbors(self, scene_ids: list[str], collection_id=None) -> list[str]:
+    def timeline(self, scene_ids: list[str], collection_id=None) -> list[dict]:
+        """Closest earlier and later scenes in the same video.
+
+        Ordering uses indexed timestamps. It does not imply story chronology.
+        """
+        if not scene_ids:
+            return []
         query = """
         UNWIND $scene_ids AS scene_id
         MATCH (s:Scene {scene_id: scene_id})
         WHERE ($collection_id IS NULL OR s.collection_id = $collection_id) AND s.start IS NOT NULL
-        CALL {
-            WITH s
-            MATCH (n:Scene)
-            WHERE n.video_id = s.video_id AND n.collection_id = s.collection_id
-                AND n.scene_id <> s.scene_id AND n.start IS NOT NULL
-            RETURN n ORDER BY abs(n.start - s.start), n.start LIMIT 2
-        }
-        RETURN DISTINCT n.scene_id AS scene_id LIMIT 4
+        MATCH (n:Scene)
+        WHERE n.video_id = s.video_id AND n.collection_id = s.collection_id
+            AND n.scene_id <> s.scene_id AND n.start IS NOT NULL
+        WITH s, n, CASE WHEN n.start < s.start THEN 'before' ELSE 'after' END AS direction
+        ORDER BY s.scene_id, direction, abs(n.start - s.start), n.scene_id
+        WITH s, direction, head(collect(n)) AS n
+        RETURN n.scene_id AS scene_id, direction, s.scene_id AS anchor, n.start AS start
+        LIMIT 8
         """
         try:
             with self._connection().session(database=self.settings.neo4j_database) as session:
                 return session.execute_read(
                     lambda tx: [
-                        r["scene_id"]
-                        for r in tx.run(query, scene_ids=scene_ids[:4], collection_id=collection_id)
+                        {
+                            "scene_id": record["scene_id"],
+                            "direction": record["direction"],
+                            "anchor": record["anchor"],
+                            "start": record["start"],
+                        }
+                        for record in tx.run(
+                            query, scene_ids=scene_ids[:4], collection_id=collection_id
+                        )
                     ]
                 )
         except Exception:
             raise SearchyError("Neo4j timeline context is unavailable", 503) from None
+
+    def neighbors(self, scene_ids: list[str], collection_id=None) -> list[str]:
+        return list(
+            dict.fromkeys(row["scene_id"] for row in self.timeline(scene_ids, collection_id))
+        )
 
     def delete_scenes(self, scene_ids: list[str]) -> None:
         if not scene_ids:
