@@ -268,7 +268,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "/api/search/sessions/{search_id}", response_model=SearchSessionResponse, dependencies=api
     )
     def search_session(search_id: str, svc=Depends(services)):
-        return svc.sessions.get(search_id)
+        saved = svc.sessions.get(search_id)
+        return {key: saved.get(key) for key in SearchSessionResponse.model_fields}
 
     def find_scene(scene_id, svc):
         scene = svc.metadata.get_scene(scene_id)

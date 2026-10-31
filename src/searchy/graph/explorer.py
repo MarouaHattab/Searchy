@@ -4,6 +4,7 @@ from collections import defaultdict
 from searchy.api.exploration import GraphEdge, GraphNode, GraphRequest, GraphResponse
 from searchy.core.errors import InvalidInput, SearchyError
 from searchy.domain import stable_id
+from searchy.retrieval.search import normalized_terms
 
 _SEEDS = """
 // searchy_explorer:seeds
@@ -43,15 +44,17 @@ CALL {
     MATCH (s)-[r:HAS_OBSERVATION]->(o:Observation)
     WHERE o.scene_id = s.scene_id
         AND (size($evidence_ids) = 0 OR o.observation_id IN $evidence_ids)
-    RETURN r, o ORDER BY coalesce(o.verified, false) DESC,
+    WITH r, o, reduce(score = 0, term IN $terms | score + CASE WHEN
+        toLower(coalesce(o.value, '') + ' ' + coalesce(o.evidence, '')) CONTAINS term THEN 1 ELSE 0 END) AS relevance
+    RETURN r, o, relevance ORDER BY relevance DESC, coalesce(o.verified, false) DESC,
         (o.character_id IS NOT NULL OR o.subject_id IS NOT NULL) DESC,
         (o.kind = 'character') DESC, o.observation_id LIMIT $observation_limit
 }
-RETURN s.scene_id AS scene_id, o.observation_id AS item_id,
+RETURN s.scene_id AS scene_id, o.observation_id AS item_id, relevance,
     {labels: labels(o), properties: properties(o)} AS node,
     {type: type(r), source: {labels: labels(s), properties: properties(s)},
         target: {labels: labels(o), properties: properties(o)}} AS edge
-ORDER BY scene_id, coalesce(o.verified, false) DESC,
+ORDER BY scene_id, relevance DESC, coalesce(o.verified, false) DESC,
     (o.character_id IS NOT NULL OR o.subject_id IS NOT NULL) DESC,
     (o.kind = 'character') DESC, item_id
 """
@@ -65,13 +68,15 @@ CALL {
     MATCH (s)-[r:HAS_DIALOGUE]->(d:Dialogue)
     WHERE d.scene_id = s.scene_id
         AND (size($evidence_ids) = 0 OR d.dialogue_id IN $evidence_ids)
-    RETURN r, d ORDER BY d.start, d.dialogue_id LIMIT $dialogue_limit
+    WITH r, d, reduce(score = 0, term IN $terms | score + CASE WHEN
+        toLower(d.text) CONTAINS term THEN 1 ELSE 0 END) AS relevance
+    RETURN r, d, relevance ORDER BY relevance DESC, d.start, d.dialogue_id LIMIT $dialogue_limit
 }
-RETURN s.scene_id AS scene_id, d.dialogue_id AS item_id,
+RETURN s.scene_id AS scene_id, d.dialogue_id AS item_id, relevance,
     {labels: labels(d), properties: properties(d)} AS node,
     {type: type(r), source: {labels: labels(s), properties: properties(s)},
         target: {labels: labels(d), properties: properties(d)}} AS edge
-ORDER BY scene_id, node.properties.start, item_id
+ORDER BY scene_id, relevance DESC, node.properties.start, item_id
 """
 
 _ENTITIES = """
@@ -351,7 +356,11 @@ class GraphExplorer:
             ):
                 counts = defaultdict(int)
                 for row in tx.run(
-                    query, scenes=scenes, evidence_ids=request.evidence_ids, **{parameter: cap + 1}
+                    query,
+                    scenes=scenes,
+                    evidence_ids=request.evidence_ids,
+                    terms=sorted(normalized_terms(request.query))[:40],
+                    **{parameter: cap + 1},
                 ):
                     scene_id = row["scene_id"]
                     counts[scene_id] += 1

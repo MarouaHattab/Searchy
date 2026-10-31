@@ -4,7 +4,7 @@ from pathlib import Path
 
 from searchy.core.config import Settings
 from searchy.core.errors import InvalidInput, SearchyError
-from searchy.domain import Scene, stable_id
+from searchy.domain import Candidate, Scene, stable_id
 from searchy.storage.characters import CharacterStore
 from searchy.storage.metadata import MetadataStore
 
@@ -223,6 +223,60 @@ def clothing_matches(
     return bool(matching_subjects)
 
 
+def simultaneous_timing(
+    query: str,
+    scene: Scene,
+    requested: list[str],
+    character_ids: list[str] | None,
+    action_terms: set[str] | frozenset[str],
+) -> str | None:
+    outside_quote = re.sub(r'["“].+?["”]', "", query)
+    if not re.search(
+        r"\b(while|simultaneously)\b|at the same time", outside_quote, re.I
+    ) or not garment_phrases(outside_quote):
+        return None
+    outfits = [
+        o
+        for o in scene.observations
+        if o.kind == "clothing"
+        and clothing_matches(
+            outside_quote, scene.model_copy(update={"observations": [o]}), requested, character_ids
+        )
+    ]
+    actions = [
+        o
+        for o in scene.observations
+        if o.kind in {"action", "interaction"}
+        and action_terms
+        and action_terms <= normalized_terms(o.value)
+        and (
+            identity_key(scene, o.subject, o.subject_id) in character_ids
+            if character_ids
+            else not requested
+            or o.subject
+            and any(character_matches(o.subject, name) for name in requested)
+        )
+    ]
+    if (
+        not outfits
+        or not actions
+        or any(o.start is None or o.end is None for o in outfits + actions)
+    ):
+        return "unverified"
+    if any(
+        max(a.start, b.start) < min(a.end, b.end)
+        or a.start == a.end
+        and b.start <= a.start < b.end
+        or b.start == b.end
+        and a.start <= b.start < a.end
+        or a.start == a.end == b.start == b.end
+        for a in outfits
+        for b in actions
+    ):
+        return "compatible"
+    return "disjoint"
+
+
 def playback(scene: Scene) -> dict:
     available = bool(scene.media and Path(scene.media.path).is_file())
     return dict(
@@ -339,7 +393,24 @@ class SearchEngine:
         channels = {}
         errors = []
         operations = []
-        if mode in {"hybrid", "graph"}:
+        if mode == "hybrid" and plan.quoted and not plan.needs_graph:
+            matches = []
+            _, records, _ = self.metadata.catalog_records()
+            for scene, indexed in records:
+                if not indexed or (collection_id and scene.collection_id != collection_id):
+                    continue
+                if character_ids and not set(character_ids) <= set(scene.character_ids):
+                    continue
+                if not all(
+                    any(character_matches(c, name) for c in scene.characters) for name in requested
+                ):
+                    continue
+                if dialogue_matches(
+                    " ".join(d.text for d in scene.dialogue), list(plan.quoted), set()
+                ):
+                    matches.append(Candidate(scene_id=scene.scene_id, score=1, channel="dialogue"))
+            channels["dialogue"] = matches[: self.settings.candidate_limit]
+        if mode == "graph" or (mode == "hybrid" and plan.needs_graph):
             operations.append(
                 (
                     "graph",
@@ -432,6 +503,9 @@ class SearchEngine:
                 continue
             if not clothing_matches(clothing_query, scene, requested, character_ids):
                 continue
+            timing = simultaneous_timing(query, scene, requested, character_ids, action_terms)
+            if timing == "disjoint":
+                continue
             transcript = " ".join(d.text for d in scene.dialogue)
             if dialogue_intent and not dialogue_matches(transcript, quoted, dialogue_target):
                 continue
@@ -469,6 +543,8 @@ class SearchEngine:
             missing = missing_content + (
                 ["character action association"] if association_unverified else []
             )
+            if timing == "unverified":
+                missing.append("simultaneous timing unverified")
             speaker_unverified = bool(
                 dialogue_intent
                 and requested
@@ -499,7 +575,7 @@ class SearchEngine:
                 + overlap * 0.6
                 - len(missing_content) / max(1, len(content_tokens)) * 0.3
             )
-            if association_unverified or speaker_unverified:
+            if association_unverified or speaker_unverified or timing == "unverified":
                 score -= 0.15
             results.append(
                 {
@@ -520,7 +596,8 @@ class SearchEngine:
                     "provenance": [p.model_dump() for p in scene.provenance],
                     "match_status": (
                         "partial_match"
-                        if (association_unverified or speaker_unverified) and not missing_content
+                        if (association_unverified or speaker_unverified or timing == "unverified")
+                        and not missing_content
                         else "metadata_match"
                         if not missing and (content_tokens or requested)
                         else "semantic_candidate"

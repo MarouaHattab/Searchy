@@ -32,6 +32,7 @@ GraphEdgeType = Literal[
 
 
 class GraphRequest(Record):
+    query: str = Field(default="", max_length=2000)
     scene_ids: list[str] = Field(min_length=1, max_length=12)
     collection_id: str | None = Field(default=None, min_length=1, max_length=80)
     max_nodes: int = Field(default=150, ge=1, le=300)

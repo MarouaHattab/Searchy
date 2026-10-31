@@ -18,6 +18,7 @@ from searchy.retrieval.search import (
     dialogue_matches,
     identity_key,
     normalized_terms,
+    simultaneous_timing,
     speaker_matches,
 )
 from searchy.retrieval.understanding import clothing_query, understand
@@ -53,7 +54,7 @@ class AnswerService:
 
         return asyncio.run(collect())
 
-    def _prepare(self, query, scene_ids, collection_id, character_ids):
+    def _prepare(self, query, scene_ids, collection_id, character_ids, include_graph=True):
         requested = self.search.requested_characters(query, collection_id)
         plan = understand(query, requested)
         response = {
@@ -76,7 +77,10 @@ class AnswerService:
                 "warnings": [],
                 "truncated": False,
             },
-            "retrieval": {"strategy": "hybrid_graph_context", "graph_used": False},
+            "retrieval": {
+                "strategy": "hybrid_graph_context" if include_graph else "text_evidence",
+                "graph_used": False,
+            },
         }
         scenes, blocks = [], []
         for scene_id in scene_ids[:6]:
@@ -110,7 +114,7 @@ class AnswerService:
                 "No retrieved scene contains enough evidence to answer this question."
             )
             return response, {}, scenes
-        if plan.temporal and self.graph is not None:
+        if plan.temporal and self.graph is not None and include_graph:
             try:
                 neighbors = self.graph.neighbors([s.scene_id for s in scenes[:4]], collection_id)
                 videos = {s.video_id for s in scenes}
@@ -148,12 +152,13 @@ class AnswerService:
             parts = item["evidence_id"].rsplit(":", 2)
             if len(parts) == 3 and parts[1] in {"observation", "dialogue"}:
                 identifiers.append(stable_id(f"{parts[1]}:{parts[0]}:{parts[2]}"))
-        if self.graph is not None:
+        if self.graph is not None and include_graph:
             try:
                 response["graph"] = (
                     GraphExplorer(self.graph, self.metadata)
                     .explore(
                         GraphRequest(
+                            query=query,
                             scene_ids=[s.scene_id for s in scenes],
                             collection_id=collection_id,
                             evidence_ids=identifiers,
@@ -276,6 +281,69 @@ class AnswerService:
             return (descriptions + dialogue + other)[:5]
         return evidence[:5]
 
+    def _session(self, sessions, search_id, query, scene_ids, collection_id, character_ids):
+        saved = sessions.get(search_id)
+        req = saved["request"]
+        ranked = [s["scene_id"] for s in saved["response"]["results"]]
+        if (
+            req["query"] != query
+            or req.get("collection_id") != collection_id
+            or (req.get("character_ids") or []) != (character_ids or [])
+            or scene_ids != ranked[:12]
+        ):
+            raise InvalidInput("The answer request does not match its search session")
+        return saved
+
+    def prepared(
+        self,
+        query,
+        scene_ids,
+        collection_id=None,
+        character_ids=None,
+        search_id=None,
+        include_graph=True,
+    ):
+        sessions = SearchSessions(self.metadata) if search_id else None
+        if sessions:
+            saved = self._session(
+                sessions, search_id, query, scene_ids, collection_id, character_ids
+            )
+            cached = saved.get("contexts", {}).get(str(include_graph))
+            if cached and (
+                not include_graph
+                or cached["response"]["retrieval"].get("graph_used")
+                or not cached["scene_ids"]
+            ):
+                return (
+                    cached["response"],
+                    cached["context"],
+                    [self.metadata.get_scene(s) for s in cached["scene_ids"]],
+                )
+        response, context, scenes = self._prepare(
+            query, scene_ids, collection_id, character_ids, include_graph
+        )
+        if sessions and (not include_graph or response["retrieval"]["graph_used"] or not scenes):
+            sessions.save_context(
+                search_id, include_graph, response, context, [s.scene_id for s in scenes]
+            )
+        return response, context, scenes
+
+    def context(self, query, scene_ids, collection_id=None, character_ids=None, search_id=None):
+        response, _, scenes = self.prepared(
+            query, scene_ids, collection_id, character_ids, search_id
+        )
+        plan = understand(query, self.search.requested_characters(query, collection_id))
+        return {
+            "search_id": search_id,
+            "scene_ids": [s.scene_id for s in scenes],
+            "graph": response["graph"],
+            "evidence": response["evidence"],
+            "warnings": response["warnings"],
+            "query_type": plan.primary_type,
+            "used_for_answer": plan.needs_graph,
+            "retrieval": response["retrieval"],
+        }
+
     async def stream(
         self,
         query: str,
@@ -286,21 +354,21 @@ class AnswerService:
     ):
         sessions = SearchSessions(self.metadata) if search_id else None
         if sessions:
-            saved = await anyio.to_thread.run_sync(sessions.get, search_id)
-            req = saved["request"]
-            ranked = [s["scene_id"] for s in saved["response"]["results"]]
-            if (
-                req["query"] != query
-                or req.get("collection_id") != collection_id
-                or req.get("character_ids", []) != (character_ids or [])
-                or scene_ids != ranked[:12]
-            ):
-                raise InvalidInput("The answer request does not match its search session")
+            saved = await anyio.to_thread.run_sync(
+                self._session, sessions, search_id, query, scene_ids, collection_id, character_ids
+            )
             if saved["answer"] and saved["answer"]["status"] == "generated":
                 yield "answer", saved["answer"]
                 return
+        plan = understand(query, self.search.requested_characters(query, collection_id))
         response, context, scenes = await anyio.to_thread.run_sync(
-            self._prepare, query, scene_ids, collection_id, character_ids
+            self.prepared,
+            query,
+            scene_ids,
+            collection_id,
+            character_ids,
+            search_id,
+            plan.needs_graph,
         )
         response["search_id"] = search_id
         if not context:
@@ -521,36 +589,11 @@ class AnswerService:
             )
         ):
             missing.append("character dialogue association")
-        if re.search(r"\b(while|simultaneously)\b|at the same time", query, re.I) and plan.clothing:
-            outfits = [
-                o
-                for o in scene.observations
-                if o.kind == "clothing"
-                and normalized_terms(o.value) & normalized_terms(" ".join(plan.clothing))
-            ]
-            actions = [
-                o
-                for o in scene.observations
-                if o.kind in {"action", "interaction"}
-                and plan.action_terms
-                and plan.action_terms <= normalized_terms(o.value)
-            ]
-            timed_outfits = [o for o in outfits if o.start is not None and o.end is not None]
-            timed_actions = [o for o in actions if o.start is not None and o.end is not None]
-            if (
-                outfits
-                and actions
-                and len(timed_outfits) == len(outfits)
-                and len(timed_actions) == len(actions)
-            ):
-                if not any(
-                    max(a.start, b.start) < min(a.end, b.end)
-                    for a in timed_outfits
-                    for b in timed_actions
-                ):
-                    return None
-            else:
-                missing.append("simultaneous timing unverified")
+        timing = simultaneous_timing(query, scene, requested, character_ids, action_terms)
+        if timing == "disjoint":
+            return None
+        if timing == "unverified":
+            missing.append("simultaneous timing unverified")
         return list(dict.fromkeys(missing))
 
     @staticmethod

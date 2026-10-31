@@ -63,6 +63,13 @@ class SearchSessions:
                     data["answer"] = None
             except SearchyError:
                 data["answer"] = None
+        for key, cached in list(data.get("contexts", {}).items()):
+            try:
+                evidence = cached["response"].get("evidence", [])
+                if cached["fingerprint"] != self._source_fingerprint(evidence):
+                    del data["contexts"][key]
+            except SearchyError:
+                del data["contexts"][key]
         from searchy.retrieval.search import playback
 
         for result in data["response"].get("results", []):
@@ -84,6 +91,28 @@ class SearchSessions:
                 ]
             }
         )
+        with self.metadata.connect() as db:
+            db.execute(
+                "UPDATE search_sessions SET data=? WHERE id=?", (json.dumps(data), identifier)
+            )
+
+    def _source_fingerprint(self, evidence):
+        return self._fingerprint(
+            {
+                "results": [
+                    {"scene_id": value} for value in sorted({item["scene_id"] for item in evidence})
+                ]
+            }
+        )
+
+    def save_context(self, identifier, include_graph, response, context, scene_ids):
+        data = self.get(identifier)
+        data.setdefault("contexts", {})[str(include_graph)] = {
+            "response": response,
+            "context": context,
+            "scene_ids": scene_ids,
+            "fingerprint": self._source_fingerprint(response["evidence"]),
+        }
         with self.metadata.connect() as db:
             db.execute(
                 "UPDATE search_sessions SET data=? WHERE id=?", (json.dumps(data), identifier)

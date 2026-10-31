@@ -102,6 +102,9 @@ SCAFFOLDING_WORDS = {
     "happening",
     "describe",
     "talk about",
+    "while",
+    "simultaneously",
+    "same",
 }
 
 
@@ -122,6 +125,10 @@ class QueryUnderstanding:
     @property
     def primary_type(self) -> str:
         return self.types[0] if self.types else "visual"
+
+    @property
+    def needs_graph(self) -> bool:
+        return not self.quoted or self.temporal or self.narrative or bool(self.clothing)
 
 
 def garment_phrases(query: str) -> list[str]:
@@ -180,8 +187,9 @@ def understand(
         else frozenset(normalized_terms(" ".join(content_tokens)) & ACTION_WORDS)
     )
 
-    narrative = bool(_CAUSE_CUES.search(lowered)) or bool(_RELATIONSHIP_CUES.search(lowered))
-    temporal = bool(_TEMPORAL_CUES.search(lowered))
+    cue_text = _QUOTED.sub("", lowered)
+    narrative = bool(_CAUSE_CUES.search(cue_text)) or bool(_RELATIONSHIP_CUES.search(cue_text))
+    temporal = bool(_TEMPORAL_CUES.search(cue_text))
 
     types: list[str] = []
     if dialogue_intent:

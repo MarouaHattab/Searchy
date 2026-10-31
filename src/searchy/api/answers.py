@@ -101,6 +101,17 @@ class SearchSessionResponse(Record):
     answer: AnswerResponse | None = None
 
 
+class SearchContextResponse(Record):
+    search_id: str | None
+    scene_ids: list[str]
+    graph: GraphResponse
+    evidence: list[AnswerEvidence]
+    warnings: list[str]
+    query_type: str
+    used_for_answer: bool
+    retrieval: dict
+
+
 def _frame(event: str, payload: dict) -> bytes:
     return f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode()
 
@@ -114,6 +125,10 @@ def create_answers_router(settings: Settings, services, authorize) -> APIRouter:
     @router.post("/search/answer", response_model=AnswerResponse)
     def answer(body: AnswerRequest, svc=Depends(services)):
         return service(svc).answer(**body.model_dump())
+
+    @router.post("/search/context", response_model=SearchContextResponse)
+    def context(body: AnswerRequest, svc=Depends(services)):
+        return service(svc).context(**body.model_dump())
 
     @router.post("/search/answer/stream")
     async def answer_stream(body: AnswerRequest, svc=Depends(services)):
