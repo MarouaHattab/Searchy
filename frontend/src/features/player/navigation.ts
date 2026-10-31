@@ -7,13 +7,44 @@ export interface SceneOrigin {
   at: number
 }
 
-export function safeOrigin(href: string | null): string | null {
-  if (!href) return null
+const SEARCH_KEYS = [
+  'q',
+  'collection',
+  'character',
+  'character_id',
+  'limit',
+  'playable',
+  'view',
+  'focus',
+  'sid',
+] as const
+
+/** Stable, shareable search URL. Only relative /search links are accepted. */
+export function canonicalSearch(href: string | null): string | null {
+  if (!href || /^[a-z][a-z0-9+.-]*:/i.test(href)) return null
   try {
-    const url = new URL(href, window.location.origin)
-    return url.origin === window.location.origin && url.pathname === '/search'
-      ? `${url.pathname}${url.search}`
-      : null
+    const url = new URL(href, 'http://searchy.local')
+    if (url.pathname !== '/search') return null
+    const incoming = new URLSearchParams(url.search)
+    const ordered = new URLSearchParams()
+    for (const key of SEARCH_KEYS) {
+      const value = incoming.get(key)?.trim() ?? ''
+      if (value) ordered.set(key, value)
+    }
+    const search = ordered.toString()
+    return search ? `/search?${search}` : '/search'
+  } catch {
+    return null
+  }
+}
+
+export function safeOrigin(href: string | null): string | null {
+  const canonical = canonicalSearch(href)
+  if (!canonical) return null
+  if (typeof window === 'undefined') return canonical
+  try {
+    const url = new URL(href!, window.location.origin)
+    return url.origin === window.location.origin && url.pathname === '/search' ? canonical : null
   } catch {
     return null
   }
@@ -21,14 +52,25 @@ export function safeOrigin(href: string | null): string | null {
 
 export function rememberOrigin(origin: Omit<SceneOrigin, 'at'>) {
   const href = safeOrigin(origin.href)
-  if (!href) return
+  if (!href || href === '/search') return
+  const sceneIds = origin.sceneIds.slice(0, 100)
   try {
     sessionStorage.setItem(
       `searchy:origin:${href}`,
-      JSON.stringify({ ...origin, sceneIds: origin.sceneIds.slice(0, 100), at: Date.now() })
+      JSON.stringify({ ...origin, href, sceneIds, at: Date.now() })
     )
+    sessionStorage.setItem('searchy:expect-return', '1')
+    for (const id of sceneIds) sessionStorage.setItem(`searchy:scene-from:${id}`, href)
   } catch {
     /* Browsers may disable session storage. */
+  }
+}
+
+export function readSceneOrigin(sceneId: string): string | null {
+  try {
+    return safeOrigin(sessionStorage.getItem(`searchy:scene-from:${sceneId}`))
+  } catch {
+    return null
   }
 }
 
@@ -67,10 +109,11 @@ export function rankingPosition(origin: SceneOrigin | null, sceneId: string) {
 
 export function sceneHref(sceneId: string, start: number | null, origin?: string) {
   const params = new URLSearchParams()
-  if (start != null) params.set('t', String(start))
+  if (start != null && Number.isFinite(start)) params.set('t', String(start))
   const safe = safeOrigin(origin ?? null)
-  if (safe) params.set('from', safe)
-  return `/scenes/${encodeURIComponent(sceneId)}${params.size ? `?${params}` : ''}`
+  if (safe && safe !== '/search') params.set('from', safe)
+  const query = params.toString()
+  return `/scenes/${encodeURIComponent(sceneId)}${query ? `?${query}` : ''}`
 }
 
 const LAST_SEARCH = 'searchy:last-search'
@@ -88,15 +131,17 @@ export function rememberSearch(href: string) {
 export function clearSearch() {
   try {
     sessionStorage.removeItem(LAST_SEARCH)
+    sessionStorage.removeItem('searchy:expect-return')
   } catch {
     /* Optional browser storage. */
   }
 }
 
 export function searchDestination(pathname: string, search: string): string {
-  if (pathname === '/search' && search) return `/search${search}`
+  const current = pathname === '/search' ? safeOrigin(`${pathname}${search}`) : null
+  if (current && current !== '/search') return current
   const from = safeOrigin(new URLSearchParams(search).get('from'))
-  if (pathname.startsWith('/scenes/') && from) return from
+  if (pathname.startsWith('/scenes/') && from && from !== '/search') return from
   try {
     const saved = JSON.parse(sessionStorage.getItem(LAST_SEARCH) ?? 'null')
     if (saved && Number.isFinite(saved.at) && Date.now() - saved.at < 86400000)

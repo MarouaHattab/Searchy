@@ -16,7 +16,14 @@ import { api, apiUrl, subtitleUrl, thumbnailUrl } from '../../services/api'
 import { episodeTitle, sceneTitle, timestamp } from '../../lib/format'
 import type { Dialogue } from '../../types'
 import { SceneInformation, SceneSidebar } from './SceneDetails'
-import { readOrigin, rankingPosition, sceneHref, safeOrigin } from './navigation'
+import {
+  readOrigin,
+  rankingPosition,
+  readSceneOrigin,
+  sceneHref,
+  safeOrigin,
+  searchDestination,
+} from './navigation'
 
 export function initialPlaybackOffset(
   requestedTime: number | null,
@@ -42,7 +49,7 @@ export default function ScenePage() {
   const [params] = useSearchParams()
   const navigate = useNavigate()
   const requestedTime = params.has('t') ? Number(params.get('t')) : null
-  const from = safeOrigin(params.get('from'))
+  const from = safeOrigin(params.get('from')) ?? readSceneOrigin(id)
   const remembered = readOrigin(from)
   const sid = from ? new URLSearchParams(from.split('?')[1]).get('sid') : null
   const session = useQuery({
@@ -65,6 +72,9 @@ export default function ScenePage() {
         }
       : null)
   const ranking = rankingPosition(origin, id)
+  const backHref =
+    origin?.href ?? from ?? searchDestination(`/scenes/${id}`, `?${params.toString()}`)
+  const backLabel = backHref === '/search' ? 'Back to search' : 'Back to results'
   const scene = useQuery({
     queryKey: ['scene', id],
     queryFn: ({ signal }) => api.scene(id, signal),
@@ -91,31 +101,34 @@ export default function ScenePage() {
   }, [id, requestedTime])
 
   useEffect(() => {
-    window.scrollTo(0, 0)
+    const overlay = document.querySelector('.scene-overlay')
+    if (overlay instanceof HTMLElement) overlay.scrollTop = 0
+    else window.scrollTo(0, 0)
     const handle = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' && from) navigate(from)
+      if (event.key === 'Escape') navigate(backHref)
     }
     window.addEventListener('keydown', handle)
     return () => window.removeEventListener('keydown', handle)
-  }, [id, from, navigate])
+  }, [id, backHref, navigate])
 
-  const backLink = (
-    <Link className="back-link" to={from ?? '/search'}>
+  const backControl = (
+    <Link className="back-link" to={backHref}>
       <ArrowLeft size={15} />
-      Back to results
+      {backLabel}
+      {origin && <span className="scene-nav-query">“{origin.query}”</span>}
     </Link>
   )
   if (scene.isPending)
     return (
       <div>
-        {backLink}
+        {backControl}
         <Loading label="Loading scene…" />
       </div>
     )
   if (scene.isError)
     return (
       <div>
-        {backLink}
+        {backControl}
         <ErrorState error={scene.error} retry={() => void scene.refetch()} />
       </div>
     )
@@ -145,25 +158,10 @@ export default function ScenePage() {
     return line.start - (data.start ?? 0) + start
   }
 
-  function backToResults() {
-    navigate(origin?.href ?? from ?? '/search')
-  }
-
   return (
     <div className="scene-page">
       <div className="scene-nav">
-        {origin ? (
-          <button className="back-link" onClick={backToResults}>
-            <ArrowLeft size={15} />
-            Back to results
-            <span className="scene-nav-query">“{origin.query}”</span>
-          </button>
-        ) : (
-          <Link className="back-link" to={from ?? '/search'}>
-            <ArrowLeft size={15} />
-            Back to results
-          </Link>
-        )}
+        {backControl}
         {ranking && (
           <div className="scene-nav-steps" aria-label="Result navigation">
             <button

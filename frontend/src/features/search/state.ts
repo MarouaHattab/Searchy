@@ -28,6 +28,7 @@ export function useResultScroll(href: string, ready: boolean) {
     const record = () => {
       window.cancelAnimationFrame(frame)
       frame = window.requestAnimationFrame(() => {
+        if (document.body.style.position === 'fixed') return
         try {
           window.sessionStorage.setItem(key, String(window.scrollY))
         } catch {

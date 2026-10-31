@@ -1,10 +1,10 @@
 import { lazy } from 'react'
 import { ChevronLeft, Search } from 'lucide-react'
 import { Link, Route, Routes } from 'react-router'
+import { SearchLayout } from '../features/search/SearchLayout'
 import { Shell } from './Shell'
 
 const DashboardPage = lazy(() => import('../pages/DashboardPage'))
-const SearchPage = lazy(() => import('../features/search/SearchPage'))
 const LibraryPage = lazy(() => import('../pages/LibraryPage'))
 const VideoPage = lazy(() => import('../pages/VideoPage'))
 const ScenePage = lazy(() => import('../features/player/ScenePage'))
@@ -26,15 +26,21 @@ function NotFound() {
   )
 }
 
+function SearchRoute() {
+  return null
+}
+
 export default function App() {
   return (
     <Routes>
       <Route element={<Shell />}>
         <Route index element={<DashboardPage />} />
-        <Route path="search" element={<SearchPage />} />
+        <Route element={<SearchLayout />}>
+          <Route path="search" element={<SearchRoute />} />
+          <Route path="scenes/:id" element={<ScenePage />} />
+        </Route>
         <Route path="library" element={<LibraryPage />} />
         <Route path="library/:id" element={<VideoPage />} />
-        <Route path="scenes/:id" element={<ScenePage />} />
         <Route path="characters" element={<CharactersPage />} />
         <Route path="jobs" element={<JobsPage />} />
         <Route path="settings" element={<SettingsPage />} />

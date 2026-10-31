@@ -54,7 +54,7 @@ export function useAnswer(body: AnswerRequest) {
   return {
     answer: result.data,
     partial: draft?.key === signature ? draft.value : undefined,
-    pending: result.isFetching,
+    pending: result.isFetching && !result.data,
     failed: result.isError,
     stopped: stopped === signature,
     cancel,

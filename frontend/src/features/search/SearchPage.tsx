@@ -1,7 +1,7 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Check, Clock3, Search, SlidersHorizontal, X } from 'lucide-react'
-import { useLocation, useSearchParams } from 'react-router'
+import { useNavigate } from 'react-router'
 import { SceneCard } from '../../components/SceneCard'
 import { Button, EmptyState, ErrorState, SectionHeading } from '../../components/ui'
 import { api, ApiError } from '../../services/api'
@@ -9,8 +9,22 @@ import { charactersQuery, workspaceQuery } from '../../services/queries'
 import { AnswerPanel } from './AnswerPanel'
 import { answerQueryKey, useAnswer } from './useAnswer'
 import { rankingOf, useResultScroll } from './state'
-import { clearSearch, rememberOrigin, rememberSearch } from '../player/navigation'
+import {
+  canonicalSearch,
+  clearSearch,
+  rememberOrigin,
+  rememberSearch,
+  searchDestination,
+} from '../player/navigation'
 import '../../styles/exploration.css'
+
+function collectionLabel(id: string) {
+  return id
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ')
+}
 
 const EvidenceGraph = lazy(() => import('../graph/EvidenceGraph'))
 
@@ -20,10 +34,10 @@ const suggestions = [
   'A conversation between Ross and Rachel',
 ]
 
-export default function SearchPage() {
+export default function SearchPage({ href, frozen = false }: { href: string; frozen?: boolean }) {
   const client = useQueryClient()
-  const [params, setParams] = useSearchParams()
-  const location = useLocation()
+  const navigate = useNavigate()
+  const params = useMemo(() => new URLSearchParams(href.split('?')[1] ?? ''), [href])
   const query = params.get('q')?.trim() ?? ''
   const collection = params.get('collection') ?? ''
   const character = params.get('character') ?? ''
@@ -36,9 +50,10 @@ export default function SearchPage() {
   const forceFresh = useRef(false)
   const resultView = params.get('view') === 'graph' ? 'graph' : 'scenes'
   const setResultView = (value: 'scenes' | 'graph') =>
-    update({ view: value === 'graph' ? 'graph' : '' })
+    update({ view: value === 'graph' ? 'graph' : '' }, true)
   const focusSceneId = params.get('focus')
-  const setFocusSceneId = (value: string | null) => update({ focus: value ?? '', view: 'graph' })
+  const setFocusSceneId = (value: string | null) =>
+    update({ focus: value ?? '', view: 'graph' }, true)
   const [highlighted, setHighlighted] = useState<string[]>([])
   const workspace = useQuery(workspaceQuery)
   const characters = useQuery(charactersQuery)
@@ -49,7 +64,7 @@ export default function SearchPage() {
         query,
         limit,
         collection_id: collection || undefined,
-        characters: character ? [character] : undefined,
+        characters: characterId || !character ? undefined : [character],
         character_ids: characterId ? [characterId] : undefined,
       }
       const sid = forceFresh.current ? null : params.get('sid')
@@ -57,13 +72,14 @@ export default function SearchPage() {
       if (sid) {
         try {
           const saved = await api.session(sid, signal)
-          if (
+          const savedCharacters = saved.request.character_ids ?? []
+          const identityMatches =
             saved.request.query === query &&
             (saved.request.collection_id ?? '') === collection &&
-            (saved.request.limit ?? 10) === limit &&
-            (saved.request.characters?.[0] ?? '') === character &&
-            (saved.request.character_ids?.[0] ?? '') === characterId
-          ) {
+            (saved.request.limit ?? limit) === limit &&
+            (savedCharacters[0] ?? '') === characterId &&
+            (characterId || (saved.request.characters?.[0] ?? '') === character)
+          if (identityMatches) {
             if (saved.answer?.status === 'generated')
               client.setQueryData(
                 answerQueryKey({
@@ -92,18 +108,28 @@ export default function SearchPage() {
   useEffect(() => {
     setDraft(query)
   }, [query])
+  const identity = `${query}|${collection}|${character}|${characterId}`
+  const sessionId = params.get('sid') ?? ''
+  const seenIdentity = useRef<string | null>(null)
   useEffect(() => {
-    setHighlighted([])
-    if (!params.get('sid')) window.scrollTo(0, 0)
-  }, [query, collection, characterId, character])
-  useEffect(() => {
-    const id = search.data?.search_id
-    if (id && params.get('sid') !== id) {
-      const next = new URLSearchParams(params)
-      next.set('sid', id)
-      setParams(next, { replace: true })
+    if (seenIdentity.current === null) {
+      seenIdentity.current = identity
+      return
     }
-  }, [search.data, params, setParams])
+    if (seenIdentity.current !== identity) {
+      seenIdentity.current = identity
+      setHighlighted([])
+      if (!sessionId) window.scrollTo(0, 0)
+    }
+  }, [identity, sessionId])
+  useEffect(() => {
+    if (frozen) return
+    const id = search.data?.search_id
+    if (!id || params.get('sid') === id) return
+    const next = new URLSearchParams(params)
+    next.set('sid', id)
+    navigate(canonicalSearch(`/search?${next.toString()}`) ?? '/search', { replace: true })
+  }, [frozen, search.data?.search_id, href, navigate, params])
   useEffect(() => {
     setWaiting(false)
     if (!search.isFetching) return
@@ -111,7 +137,8 @@ export default function SearchPage() {
     return () => window.clearTimeout(timer)
   }, [search.isFetching])
 
-  function update(values: Record<string, string>) {
+  function update(values: Record<string, string>, replace = false) {
+    if (frozen) return
     const next = new URLSearchParams(params)
     Object.entries(values).forEach(([key, value]) =>
       value ? next.set(key, value) : next.delete(key)
@@ -125,15 +152,38 @@ export default function SearchPage() {
       next.delete('view')
       next.delete('focus')
     }
-    setParams(next)
+    navigate(canonicalSearch(`/search?${next.toString()}`) ?? '/search', { replace })
   }
 
   const results =
     search.data?.results.filter((scene) => !playable || scene.playback.available) ?? []
-  const searchHref = `${location.pathname}?${params.toString()}`
+  const searchHref = href
   useEffect(() => {
-    if (query) rememberSearch(searchHref)
-  }, [query, searchHref])
+    if (frozen || !query) return
+    rememberSearch(searchHref)
+    try {
+      sessionStorage.removeItem('searchy:expect-return')
+    } catch {
+      /* The scene URL still carries the search link. */
+    }
+  }, [frozen, query, searchHref])
+  useEffect(() => {
+    if (frozen || query) return
+    let pending = false
+    try {
+      pending = sessionStorage.getItem('searchy:expect-return') === '1'
+    } catch {
+      return
+    }
+    if (!pending) return
+    try {
+      sessionStorage.removeItem('searchy:expect-return')
+    } catch {
+      /* Continue with the saved search when storage is readable. */
+    }
+    const saved = searchDestination('/scenes/return', '')
+    if (saved !== '/search') navigate(saved, { replace: true })
+  }, [frozen, query, navigate])
   const answer = useAnswer({
     query,
     scene_ids: search.data?.results.slice(0, 12).map((s) => s.scene_id) ?? [],
@@ -141,7 +191,7 @@ export default function SearchPage() {
     character_ids: characterId ? [characterId] : undefined,
     search_id: search.data?.search_id,
   })
-  useResultScroll(searchHref, !search.isFetching && !!search.data && !answer.pending)
+  useResultScroll(searchHref, !!search.data && !search.isPending)
 
   function openScene() {
     rememberOrigin({
@@ -170,6 +220,7 @@ export default function SearchPage() {
     update({ q: draft.trim(), limit: '' })
   }
 
+  const settling = search.isPending && !search.data
   return (
     <div className={`search-page ${query ? 'has-results' : ''}`}>
       <section className="search-hero">
@@ -242,9 +293,13 @@ export default function SearchPage() {
             <option value="">All collections</option>
             {workspace.data?.collections.map((item) => (
               <option key={item.collection_id} value={item.collection_id}>
-                {item.collection_id}
+                {collectionLabel(item.collection_id)}
               </option>
             ))}
+            {collection &&
+              !workspace.data?.collections.some((item) => item.collection_id === collection) && (
+                <option value={collection}>{collectionLabel(collection)}</option>
+              )}
           </select>
           <label className="sr-only" htmlFor="search-character">
             Character
@@ -255,18 +310,27 @@ export default function SearchPage() {
             value={characterId || character}
             onChange={(event) => {
               const selected = knownCharacters.find((item) => item.id === event.target.value)
-              update({ character_id: selected?.id ?? '', character: '', limit: '' })
+              update({
+                character_id: selected?.id ?? '',
+                character: selected?.name ?? '',
+                limit: '',
+              })
             }}
           >
             <option value="">Any character</option>
             {knownCharacters.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name}
-                {item.collection_id && !collection ? ` · ${item.collection_id}` : ''}
+                {item.collection_id && !collection
+                  ? ` · ${collectionLabel(item.collection_id)}`
+                  : ''}
                 {item.origin === 'custom' ? ` · ${item.id.slice(0, 4)}` : ''}
               </option>
             ))}
-            {character && <option value={character}>{character}</option>}
+            {characterId && !knownCharacters.some((item) => item.id === characterId) && (
+              <option value={characterId}>{character || 'Selected character'}</option>
+            )}
+            {!characterId && character && <option value={character}>{character}</option>}
           </select>
           {(collection || character || characterId) && (
             <button
@@ -282,7 +346,7 @@ export default function SearchPage() {
               className="text-link muted"
               onClick={() => {
                 clearSearch()
-                setParams(new URLSearchParams())
+                navigate('/search')
               }}
             >
               New search
@@ -307,7 +371,7 @@ export default function SearchPage() {
           <div className="section-heading search-results-heading">
             <div>
               <h2>
-                {search.isFetching
+                {settling
                   ? 'Looking for your moment…'
                   : search.isError
                     ? 'Search interrupted'
@@ -316,12 +380,14 @@ export default function SearchPage() {
                       : `${search.data?.results.length ?? 0} scene matches`}
               </h2>
               <p className="muted small">
-                {search.isFetching
+                {settling
                   ? 'Matching dialogue, descriptions, and scene knowledge.'
-                  : 'Ranked by matching evidence in your collection.'}
+                  : search.isFetching
+                    ? 'Updating these matches…'
+                    : 'Ranked by matching evidence in your collection.'}
               </p>
             </div>
-            {!search.isFetching && !!search.data?.results.length && (
+            {!settling && !!search.data?.results.length && (
               <button
                 className={`filter-toggle ${playable ? 'selected' : ''}`}
                 aria-pressed={playable}
@@ -331,7 +397,7 @@ export default function SearchPage() {
               </button>
             )}
           </div>
-          {search.isFetching ? (
+          {settling ? (
             <>
               <div className="search-skeleton-grid">
                 {[0, 1, 2].map((id) => (
