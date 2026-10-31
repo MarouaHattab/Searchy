@@ -8,6 +8,7 @@ import type {
   SearchRequest,
   SearchResponse,
   SearchAnswer,
+  SearchContext,
   Workspace,
 } from '../types'
 
@@ -148,7 +149,17 @@ export const api = {
       body: JSON.stringify(body),
       signal,
     }),
-  graph: (body: { scene_ids: string[]; collection_id?: string }, signal?: AbortSignal) =>
+  context: (body: AnswerRequest, signal?: AbortSignal) =>
+    request<SearchContext>('/api/search/context', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    }),
+  graph: (
+    body: { scene_ids: string[]; collection_id?: string; query?: string },
+    signal?: AbortSignal
+  ) =>
     request<EvidenceGraph>('/api/search/graph', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

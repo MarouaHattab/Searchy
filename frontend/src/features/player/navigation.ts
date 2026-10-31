@@ -72,3 +72,37 @@ export function sceneHref(sceneId: string, start: number | null, origin?: string
   if (safe) params.set('from', safe)
   return `/scenes/${encodeURIComponent(sceneId)}${params.size ? `?${params}` : ''}`
 }
+
+const LAST_SEARCH = 'searchy:last-search'
+
+export function rememberSearch(href: string) {
+  const safe = safeOrigin(href)
+  if (!safe) return
+  try {
+    sessionStorage.setItem(LAST_SEARCH, JSON.stringify({ href: safe, at: Date.now() }))
+  } catch {
+    /* Navigation still retains context through scene URLs. */
+  }
+}
+
+export function clearSearch() {
+  try {
+    sessionStorage.removeItem(LAST_SEARCH)
+  } catch {
+    /* Optional browser storage. */
+  }
+}
+
+export function searchDestination(pathname: string, search: string): string {
+  if (pathname === '/search' && search) return `/search${search}`
+  const from = safeOrigin(new URLSearchParams(search).get('from'))
+  if (pathname.startsWith('/scenes/') && from) return from
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(LAST_SEARCH) ?? 'null')
+    if (saved && Number.isFinite(saved.at) && Date.now() - saved.at < 86400000)
+      return safeOrigin(saved.href) ?? '/search'
+  } catch {
+    /* A fresh search is always available. */
+  }
+  return '/search'
+}

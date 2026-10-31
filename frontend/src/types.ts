@@ -149,6 +149,17 @@ export interface EvidenceGraph {
   warnings: string[]
 }
 
+export interface SearchContext {
+  search_id: string | null
+  scene_ids: string[]
+  graph: EvidenceGraph
+  evidence: SearchAnswer['evidence']
+  warnings: string[]
+  query_type: string
+  used_for_answer: boolean
+  retrieval: SearchAnswer['retrieval']
+}
+
 export interface SearchRequest {
   query: string
   limit?: number

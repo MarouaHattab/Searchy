@@ -1,5 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowRight, Check, Clock3, Search, SlidersHorizontal, X } from 'lucide-react'
 import { useLocation, useSearchParams } from 'react-router'
 import { SceneCard } from '../../components/SceneCard'
@@ -7,9 +7,9 @@ import { Button, EmptyState, ErrorState, SectionHeading } from '../../components
 import { api, ApiError } from '../../services/api'
 import { charactersQuery, workspaceQuery } from '../../services/queries'
 import { AnswerPanel } from './AnswerPanel'
-import { useAnswer } from './useAnswer'
+import { answerQueryKey, useAnswer } from './useAnswer'
 import { rankingOf, useResultScroll } from './state'
-import { rememberOrigin } from '../player/navigation'
+import { clearSearch, rememberOrigin, rememberSearch } from '../player/navigation'
 import '../../styles/exploration.css'
 
 const EvidenceGraph = lazy(() => import('../graph/EvidenceGraph'))
@@ -21,6 +21,7 @@ const suggestions = [
 ]
 
 export default function SearchPage() {
+  const client = useQueryClient()
   const [params, setParams] = useSearchParams()
   const location = useLocation()
   const query = params.get('q')?.trim() ?? ''
@@ -62,8 +63,20 @@ export default function SearchPage() {
             (saved.request.limit ?? 10) === limit &&
             (saved.request.characters?.[0] ?? '') === character &&
             (saved.request.character_ids?.[0] ?? '') === characterId
-          )
+          ) {
+            if (saved.answer?.status === 'generated')
+              client.setQueryData(
+                answerQueryKey({
+                  query,
+                  scene_ids: saved.response.results.slice(0, 12).map((s) => s.scene_id),
+                  collection_id: collection || undefined,
+                  character_ids: characterId ? [characterId] : undefined,
+                  search_id: saved.response.search_id,
+                }),
+                saved.answer
+              )
             return saved.response
+          }
         } catch (error) {
           if (!(error instanceof ApiError) || ![404, 409].includes(error.status)) throw error
         }
@@ -78,6 +91,8 @@ export default function SearchPage() {
 
   useEffect(() => {
     setDraft(query)
+  }, [query])
+  useEffect(() => {
     setHighlighted([])
     if (!params.get('sid')) window.scrollTo(0, 0)
   }, [query, collection, characterId, character])
@@ -116,6 +131,9 @@ export default function SearchPage() {
   const results =
     search.data?.results.filter((scene) => !playable || scene.playback.available) ?? []
   const searchHref = `${location.pathname}?${params.toString()}`
+  useEffect(() => {
+    if (query) rememberSearch(searchHref)
+  }, [query, searchHref])
   const answer = useAnswer({
     query,
     scene_ids: search.data?.results.slice(0, 12).map((s) => s.scene_id) ?? [],
@@ -259,6 +277,17 @@ export default function SearchPage() {
               <X size={12} />
             </button>
           )}
+          {query && (
+            <button
+              className="text-link muted"
+              onClick={() => {
+                clearSearch()
+                setParams(new URLSearchParams())
+              }}
+            >
+              New search
+            </button>
+          )}
         </div>
         {!query && (
           <div className="suggestions">
@@ -380,6 +409,9 @@ export default function SearchPage() {
                   <Suspense fallback={<p className="muted">Loading graph explorer…</p>}>
                     <EvidenceGraph
                       scenes={search.data.results}
+                      query={query}
+                      characterId={characterId}
+                      onFocus={setFocusSceneId}
                       answerGraph={answer.answer?.graph}
                       stateKey={search.data.search_id}
                       origin={searchHref}

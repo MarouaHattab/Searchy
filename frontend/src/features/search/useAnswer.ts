@@ -5,9 +5,8 @@ import type { SearchAnswer } from '../../types'
 
 type PartialAnswer = Pick<SearchAnswer, 'answer' | 'claims' | 'citations'>
 
-export function useAnswer(body: AnswerRequest) {
-  const client = useQueryClient()
-  const key = [
+export function answerQueryKey(body: AnswerRequest) {
+  return [
     'search-answer',
     body.query,
     body.scene_ids.join(','),
@@ -15,6 +14,11 @@ export function useAnswer(body: AnswerRequest) {
     body.character_ids?.join(',') ?? '',
     body.search_id ?? '',
   ]
+}
+
+export function useAnswer(body: AnswerRequest) {
+  const client = useQueryClient()
+  const key = answerQueryKey(body)
   const signature = JSON.stringify(key)
   const active = useRef(signature)
   active.current = signature

@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
+import { useQueries, useQuery } from '@tanstack/react-query'
 import {
   Background,
-  Controls,
   Handle,
+  MarkerType,
   Position,
   ReactFlow,
   ReactFlowProvider,
@@ -17,444 +18,523 @@ import {
   MapPin,
   Maximize2,
   MessageSquare,
+  Minus,
+  Plus,
+  Play,
+  RotateCcw,
   ScanSearch,
   Shirt,
+  SlidersHorizontal,
   Users,
   X,
 } from 'lucide-react'
-import { Link, useNavigate } from 'react-router'
-import { Button, EmptyState, Loading } from '../../components/ui'
+import { useNavigate } from 'react-router'
+import { Button, EmptyState, ErrorState, Loading } from '../../components/ui'
+import { api } from '../../services/api'
+import { excerpt, timestamp } from '../../lib/format'
 import { sceneHref } from '../player/navigation'
-import { episodeTitle, timestamp } from '../../lib/format'
-import type {
-  EvidenceEdge,
-  EvidenceGraph as GraphData,
-  EvidenceNode,
-  SceneMatch,
-} from '../../types'
+import { EvidenceInspector } from './EvidenceInspector'
+import {
+  entityLabel,
+  layoutGraph,
+  mergeGraphs,
+  overviewHidden,
+  readGraphState,
+  relationshipLabel,
+  saveGraphState,
+  typeLabels,
+  visibleGraph,
+  type GraphPreferences,
+} from './model'
+import type { EvidenceGraph as GraphData, EvidenceNode, SceneMatch } from '../../types'
 import '@xyflow/react/dist/style.css'
 
-const typeLabels: Record<string, string> = {
-  Scene: 'Scenes',
-  Video: 'Videos',
-  Episode: 'Episodes',
-  Character: 'Characters',
-  Observation: 'Observations',
-  Clothing: 'Clothing',
-  Action: 'Actions',
-  Object: 'Objects',
-  Location: 'Locations',
-  Dialogue: 'Dialogue',
-}
 const icons = {
   Scene: Film,
   Video: Film,
   Episode: Film,
   Character: Users,
   Observation: ScanSearch,
-  Clothing: Shirt,
+  Dialogue: MessageSquare,
   Action: GitBranch,
   Object: ScanSearch,
   Location: MapPin,
-  Dialogue: MessageSquare,
+  Clothing: Shirt,
 }
-type GraphNode = Node<{ record: EvidenceNode; label: string }, 'evidence'>
-
-function EvidenceCard({ data }: NodeProps<GraphNode>) {
-  const Icon = icons[data.record.type as keyof typeof icons] ?? ScanSearch
+type GraphNode = Node<
+  { record: EvidenceNode; label: string; open?: (record: EvidenceNode) => void },
+  'evidence'
+>
+const EvidenceCard = memo(function EvidenceCard({ data }: NodeProps<GraphNode>) {
+  const record = data.record
+  const Icon = icons[record.type as keyof typeof icons] ?? ScanSearch
+  const title =
+    record.type === 'Scene'
+      ? String(record.properties.episode_id ?? record.label).replace(/^\d+x\d+\s*-\s*/, '')
+      : record.type === 'Observation'
+        ? String(record.properties.value ?? record.label)
+        : record.label
   return (
-    <div className={`evidence-node evidence-node-${data.record.type.toLowerCase()}`}>
+    <div className={`graph-card graph-card-${record.type.toLowerCase()}`}>
       <Handle type="target" position={Position.Left} />
-      <span className="evidence-node-kind">
+      <span className="graph-card-kind">
         <Icon size={13} />
-        {data.record.type}
+        {entityLabel(record.type)}
       </span>
-      <strong>{data.label}</strong>
-      {data.record.type === 'Scene' && (
-        <span className="muted small">
-          {timestamp(data.record.start)} – {timestamp(data.record.end)}
-        </span>
+      <strong title={excerpt(title, 300)}>{excerpt(title, 110)}</strong>
+      {record.type === 'Scene' && (
+        <div className="graph-card-foot">
+          <span>
+            {timestamp(record.start)} – {timestamp(record.end)}
+          </span>
+          <button
+            className="graph-node-play nodrag nopan"
+            aria-label={`Play scene at ${timestamp(record.start)}`}
+            onClick={(event) => {
+              event.stopPropagation()
+              data.open?.(record)
+            }}
+          >
+            <Play size={12} />
+          </button>
+        </div>
       )}
       <Handle type="source" position={Position.Right} />
     </div>
   )
-}
+})
 const nodeTypes = { evidence: EvidenceCard }
 
-function layout(nodes: EvidenceNode[]): GraphNode[] {
-  const columns = {
-    Character: 0,
-    Scene: 1,
-    Video: 3,
-    Episode: 3,
-    Observation: 2,
-    Dialogue: 2,
-    Clothing: 3,
-    Action: 3,
-    Object: 3,
-    Location: 3,
-  }
-  const occupied = [
-    ...new Set(nodes.map((node) => columns[node.type as keyof typeof columns] ?? 3)),
-  ].sort()
-  const counts = [0, 0, 0, 0]
-  return nodes.map((record) => {
-    const column = columns[record.type as keyof typeof columns] ?? 3
-    const row = counts[column]++
-    return {
-      id: record.id,
-      type: 'evidence',
-      position: { x: occupied.indexOf(column) * 300, y: row * 116 },
-      data: { record, label: record.label },
-      ariaLabel: `${record.type}: ${record.label}`,
-    }
-  })
-}
-
-function savedGraph(key: string): {
-  hidden?: string[]
-  hiddenEdges?: string[]
-  selected?: string
-  positions?: Record<string, { x: number; y: number }>
-  viewport?: { x: number; y: number; zoom: number }
-} {
-  try {
-    return JSON.parse(sessionStorage.getItem(`searchy:graph:${key}`) ?? '{}')
-  } catch {
-    return {}
-  }
-}
-
-function GraphCanvas({
-  graph,
-  scenes,
-  onSelection,
-  stateKey,
-  origin,
-  onOpen,
-  focusSceneId,
-}: {
-  stateKey: string
-  origin: string
-  onOpen: () => void
-  focusSceneId: string | null
-  graph: GraphData
+interface Props {
   scenes: SceneMatch[]
+  answerGraph?: GraphData
+  stateKey: string
+  query: string
+  collection: string
+  characterId: string
+  origin: string
+  focusSceneId: string | null
+  onOpen: () => void
+  onFocus: (id: string | null) => void
   onSelection: (ids: string[]) => void
-}) {
+}
+
+function GraphWorkspace({
+  scenes,
+  answerGraph,
+  stateKey,
+  query,
+  collection,
+  characterId,
+  origin,
+  focusSceneId,
+  onOpen,
+  onFocus,
+  onSelection,
+}: Props) {
   const flow = useReactFlow()
   const navigate = useNavigate()
-  const saved = useMemo(() => savedGraph(stateKey), [stateKey])
-  const [hidden, setHidden] = useState<string[]>(
-    saved.hidden ?? ['Observation', 'Dialogue', 'Object', 'Clothing', 'Action']
+  const [preferences, setPreferences] = useState<GraphPreferences>(() => readGraphState(stateKey))
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const suppliedGraph = answerGraph?.nodes.length ? answerGraph : undefined
+  const context = useQuery({
+    queryKey: ['search-context', stateKey],
+    queryFn: ({ signal }) =>
+      api.context(
+        {
+          query,
+          scene_ids: scenes.slice(0, 12).map((s) => s.scene_id),
+          collection_id: collection || undefined,
+          character_ids: characterId ? [characterId] : undefined,
+          search_id: stateKey,
+        },
+        signal
+      ),
+    enabled: !suppliedGraph && scenes.length > 0,
+    retry: false,
+    staleTime: Infinity,
+    gcTime: 60 * 60_000,
+  })
+  const base = suppliedGraph ?? context.data?.graph
+  const orderedIds = useMemo(() => {
+    const ranked = scenes.map((s) => s.scene_id)
+    const included = base?.scene_ids ?? []
+    return [
+      ...new Set([...ranked.filter((id) => included.includes(id)), ...included, ...ranked]),
+    ].slice(0, 12)
+  }, [scenes, base])
+  const scope = useMemo(
+    () => (focusSceneId ? [focusSceneId] : orderedIds.slice(0, preferences.count)),
+    [focusSceneId, orderedIds, preferences.count]
   )
-  const [hiddenEdges, setHiddenEdges] = useState<string[]>(saved.hiddenEdges ?? [])
-  const [selected, setSelected] = useState<EvidenceNode | EvidenceEdge | null>(
+  const extraIds = [
+    ...new Set([
+      ...preferences.expanded,
+      ...scope.filter((id) => base && !base.scene_ids.includes(id)),
+    ]),
+  ].slice(0, 12)
+  const extra = useQueries({
+    queries: extraIds.map((id) => ({
+      queryKey: ['graph-expansion', stateKey, id, query],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        api.graph({ scene_ids: [id], collection_id: collection || undefined, query }, signal),
+      enabled: !!base,
+      retry: false,
+      staleTime: Infinity,
+      gcTime: 60 * 60_000,
+    })),
+  })
+  const extraSignature = extra.map((result) => result.dataUpdatedAt).join(',')
+  const graph = useMemo(
     () =>
-      [...graph.nodes, ...graph.edges].find(
-        (n) => n.id === (focusSceneId ? `Scene:${focusSceneId}` : saved.selected)
-      ) ?? null
+      mergeGraphs([
+        ...(base ? [base] : []),
+        ...extra.flatMap((result) => (result.data ? [result.data] : [])),
+      ]),
+    [base, extraSignature]
   )
-  const types = useMemo(() => [...new Set(graph.nodes.map((node) => node.type))].sort(), [graph])
-  const relationshipTypes = useMemo(
-    () => [...new Set(graph.edges.map((edge) => edge.type))].sort(),
-    [graph]
+  const view = useMemo(
+    () => visibleGraph(graph, scope, preferences.hidden, preferences.hiddenEdges),
+    [graph, scope, preferences.hidden, preferences.hiddenEdges]
   )
-  const visible = useMemo(
-    () => graph.nodes.filter((node) => !hidden.includes(node.type)),
-    [graph, hidden]
-  )
-  const [nodes, setNodes, onNodesChange] = useNodesState<GraphNode>(layout(visible))
+  const selected = [...graph.nodes, ...graph.edges].find((item) => item.id === preferences.selected)
   useEffect(() => {
+    setPreferences((previous) =>
+      previous.focusedScene === focusSceneId
+        ? previous
+        : {
+            ...previous,
+            focusedScene: focusSceneId,
+            selected: focusSceneId ? `Scene:${focusSceneId}` : previous.selected,
+          }
+    )
+  }, [focusSceneId])
+  const [nodes, setNodes, onNodesChange] = useNodesState<GraphNode>([])
+  const openScene = useCallback(
+    (record: EvidenceNode) => {
+      onOpen()
+      navigate(sceneHref(record.scene_ids[0], record.start, origin))
+    },
+    [onOpen, navigate, origin]
+  )
+  useEffect(() => {
+    const saved = readGraphState(stateKey)
     setNodes(
-      layout(visible).map((node) => ({
+      layoutGraph(view.nodes, view.edges, orderedIds, saved.positions).map((node) => ({
         ...node,
-        position: saved.positions?.[node.id] ?? node.position,
+        data: { ...node.data, open: openScene },
       }))
     )
-  }, [visible, setNodes, saved])
+  }, [view, orderedIds, setNodes, stateKey, openScene])
+  useEffect(() => saveGraphState(stateKey, preferences), [stateKey, preferences])
+  const selectionSignature = selected?.scene_ids.join(',') ?? ''
   useEffect(() => {
-    try {
-      sessionStorage.setItem(
-        `searchy:graph:${stateKey}`,
-        JSON.stringify({
-          ...savedGraph(stateKey),
-          hidden,
-          hiddenEdges,
-          selected: selected?.id,
-          positions: Object.fromEntries(nodes.map((n) => [n.id, n.position])),
-        })
-      )
-    } catch {
-      /* Graph exploration still works when storage is unavailable. */
+    onSelection(selectionSignature ? selectionSignature.split(',') : [])
+  }, [selectionSignature, onSelection])
+  const connected = new Set(
+    selected
+      ? [
+          'source' in selected ? selected.source : selected.id,
+          ...('target' in selected ? [selected.target] : []),
+          ...view.edges
+            .filter((e) => e.source === selected.id || e.target === selected.id)
+            .flatMap((e) => [e.source, e.target]),
+        ]
+      : []
+  )
+  const displayNodes = nodes.map((node) => ({
+    ...node,
+    selected: node.id === selected?.id,
+    style: { opacity: selected && !connected.has(node.id) ? 0.4 : 1 },
+  }))
+  const edges = view.edges.map((edge) => ({
+    ...edge,
+    type: 'default',
+    label:
+      preferences.labels || edge.id === selected?.id ? relationshipLabel(edge.type) : undefined,
+    ariaLabel: `${relationshipLabel(edge.type)}: ${graph.nodes.find((n) => n.id === edge.source)?.label ?? ''} to ${graph.nodes.find((n) => n.id === edge.target)?.label ?? ''}`,
+    selected: edge.id === selected?.id,
+    markerEnd: { type: MarkerType.ArrowClosed, width: 13, height: 13 },
+    style: {
+      stroke: edge.id === selected?.id ? 'var(--accent)' : 'var(--graph-line)',
+      strokeWidth: edge.id === selected?.id ? 2 : 1.2,
+      opacity: selected && !connected.has(edge.source) && !connected.has(edge.target) ? 0.25 : 1,
+    },
+    labelStyle: { fill: 'var(--text)', fontSize: 11 },
+    labelBgStyle: { fill: 'var(--surface)' },
+    labelBgPadding: [6, 3] as [number, number],
+  }))
+  const busy = extra.some((result) => result.isFetching)
+  const expand = (id: string) => {
+    const collapsing = preferences.expanded.includes(id)
+    onFocus(collapsing ? null : id)
+    setPreferences((previous) => ({
+      ...previous,
+      expanded: previous.expanded.includes(id)
+        ? previous.expanded.filter((s) => s !== id)
+        : [...previous.expanded, id].slice(0, 3),
+      hidden: collapsing
+        ? [...new Set([...previous.hidden, 'Observation', 'Dialogue', 'Action', 'Clothing'])]
+        : previous.hidden.filter(
+            (type) => !['Observation', 'Dialogue', 'Action', 'Clothing'].includes(type)
+          ),
+    }))
+  }
+  const reset = () => {
+    const initial = {
+      ...readGraphState('new'),
+      hidden: [...overviewHidden],
+      count: 3,
+      selected: null,
+      expanded: [],
+      positions: {},
+      viewport: undefined,
     }
-  }, [stateKey, hidden, hiddenEdges, selected, nodes])
-  const edges = useMemo(() => {
-    const ids = new Set(visible.map((node) => node.id))
-    return graph.edges
-      .filter(
-        (edge) => ids.has(edge.source) && ids.has(edge.target) && !hiddenEdges.includes(edge.type)
-      )
-      .map((edge) => ({
-        id: edge.id,
-        source: edge.source,
-        target: edge.target,
-        label: edge.type.replaceAll('_', ' ').toLowerCase(),
-        style: { stroke: 'var(--muted)', strokeWidth: 1 },
-        labelStyle: { fill: 'var(--muted)', fontSize: 10 },
-        labelBgStyle: { fill: 'var(--surface)' },
-        selected: selected?.id === edge.id,
-        ariaLabel: edge.type.replaceAll('_', ' ').toLowerCase(),
+    setPreferences(initial)
+    saveGraphState(stateKey, initial)
+    onFocus(null)
+    setNodes(
+      layoutGraph(view.nodes, view.edges, orderedIds).map((n) => ({
+        ...n,
+        data: { ...n.data, open: openScene },
       }))
-  }, [graph, visible, hiddenEdges, selected])
-
-  function toggle(value: string, values: string[], set: (items: string[]) => void) {
-    set(values.includes(value) ? values.filter((item) => item !== value) : [...values, value])
-    setSelected(null)
-    onSelection([])
+    )
+    window.requestAnimationFrame(
+      () => void flow.fitView({ padding: 0.12, minZoom: 0.85, maxZoom: 1 })
+    )
   }
-  function select(item: EvidenceNode | EvidenceEdge) {
-    setSelected(item)
-    onSelection(item.scene_ids)
-  }
-  return (
-    <div className="evidence-explorer panel">
-      <div className="evidence-toolbar">
-        <span>
-          <GitBranch size={16} />
-          {nodes.length} of {graph.nodes.length} nodes · {edges.length} connections
-        </span>
-        <Button variant="ghost" onClick={() => void flow.fitView({ padding: 0.15 })}>
-          <Maximize2 size={15} />
-          Fit view
+  if (!base && context.isPending) return <Loading label="Loading the indexed scene evidence…" />
+  if (!base && context.isError)
+    return <ErrorState error={context.error} retry={() => void context.refetch()} />
+  if (!base?.nodes.length)
+    return (
+      <EmptyState title="No graph evidence is available">
+        <p>Scene results remain available. Check service status or retry the graph.</p>
+        <Button variant="secondary" onClick={() => void context.refetch()}>
+          Retry graph
         </Button>
+      </EmptyState>
+    )
+  return (
+    <div className="graph-workspace graph-workspace-v2">
+      <header className="graph-heading">
+        <div>
+          <span className="graph-heading-icon">
+            <GitBranch size={19} />
+          </span>
+          <div>
+            <h3>Scene evidence</h3>
+            <p>
+              {suppliedGraph || context.data?.used_for_answer
+                ? 'Selected graph context for this answer'
+                : 'Related indexed evidence'}{' '}
+              · {scope.length} scenes
+            </p>
+          </div>
+        </div>
+        <Button variant="ghost" onClick={reset}>
+          <RotateCcw size={14} />
+          Reset view
+        </Button>
+      </header>
+      <div className="graph-controls">
+        <div className="graph-scope">
+          <span>
+            {view.nodes.length} nodes · {view.edges.length} connections
+          </span>
+          {busy && <span className="small muted">Loading evidence…</span>}
+          {focusSceneId && (
+            <button className="text-link" onClick={() => onFocus(null)}>
+              Show all matches <X size={12} />
+            </button>
+          )}
+          {!focusSceneId && preferences.count < orderedIds.length && (
+            <button
+              className="text-link"
+              disabled={busy}
+              onClick={() => setPreferences((p) => ({ ...p, count: Math.min(12, p.count + 3) }))}
+            >
+              Add next {Math.min(3, orderedIds.length - preferences.count)} scenes{' '}
+              <Plus size={13} />
+            </button>
+          )}
+        </div>
+        <div>
+          <button
+            className={`graph-tool ${filtersOpen ? 'active' : ''}`}
+            aria-expanded={filtersOpen}
+            onClick={() => setFiltersOpen(!filtersOpen)}
+          >
+            <SlidersHorizontal size={14} />
+            Filters
+          </button>
+          <button
+            className={`graph-tool ${preferences.labels ? 'active' : ''}`}
+            aria-pressed={preferences.labels}
+            onClick={() => setPreferences((p) => ({ ...p, labels: !p.labels }))}
+          >
+            Labels
+          </button>
+        </div>
       </div>
-      <details className="evidence-filters">
-        <summary>Filter the graph</summary>
-        <p className="muted small">
-          Start with scenes and characters. Add detailed evidence below.
-        </p>
-        <fieldset>
-          <legend>Entities</legend>
-          {types.map((type) => (
-            <label key={type}>
-              <input
-                type="checkbox"
-                checked={!hidden.includes(type)}
-                onChange={() => toggle(type, hidden, setHidden)}
-              />
-              {typeLabels[type] ?? type}
-            </label>
-          ))}
-        </fieldset>
-        <fieldset>
-          <legend>Relationships</legend>
-          {relationshipTypes.map((type) => (
-            <label key={type}>
-              <input
-                type="checkbox"
-                checked={!hiddenEdges.includes(type)}
-                onChange={() => toggle(type, hiddenEdges, setHiddenEdges)}
-              />
-              {type.replaceAll('_', ' ').toLowerCase()}
-            </label>
-          ))}
-        </fieldset>
-      </details>
-      <div className="evidence-canvas-layout">
-        <div
-          className="evidence-canvas"
-          role="region"
-          aria-label="Interactive scene evidence graph"
-        >
+      {filtersOpen && (
+        <div className="graph-filter-panel">
+          <fieldset>
+            <legend>Show entities</legend>
+            {Object.entries(typeLabels)
+              .filter(([type]) => graph.nodes.some((n) => n.type === type))
+              .map(([type, label]) => (
+                <label key={type}>
+                  <input
+                    type="checkbox"
+                    checked={!preferences.hidden.includes(type)}
+                    onChange={() =>
+                      setPreferences((p) => ({
+                        ...p,
+                        hidden: p.hidden.includes(type)
+                          ? p.hidden.filter(
+                              (t) =>
+                                t !== type &&
+                                (!['Action', 'Clothing'].includes(type) || t !== 'Observation')
+                            )
+                          : [...p.hidden, type],
+                      }))
+                    }
+                  />
+                  {label}
+                </label>
+              ))}
+          </fieldset>
+          <fieldset>
+            <legend>Show connections</legend>
+            {[...new Set(graph.edges.map((e) => e.type))].map((type) => (
+              <label key={type}>
+                <input
+                  type="checkbox"
+                  checked={!preferences.hiddenEdges.includes(type)}
+                  onChange={() =>
+                    setPreferences((p) => ({
+                      ...p,
+                      hiddenEdges: p.hiddenEdges.includes(type)
+                        ? p.hiddenEdges.filter((t) => t !== type)
+                        : [...p.hiddenEdges, type],
+                    }))
+                  }
+                />
+                {relationshipLabel(type)}
+              </label>
+            ))}
+          </fieldset>
+        </div>
+      )}
+      <div className="graph-stage">
+        <div className="graph-viewport" role="region" aria-label="Interactive scene evidence graph">
           <ReactFlow
-            nodes={nodes}
+            nodes={displayNodes}
             edges={edges}
             nodeTypes={nodeTypes}
             onNodesChange={onNodesChange}
-            onNodeClick={(_, node) => {
-              select(node.data.record)
-              if (node.data.record.type === 'Scene') {
-                onOpen()
-                navigate(sceneHref(node.data.record.scene_ids[0], node.data.record.start, origin))
-              }
-            }}
-            defaultViewport={saved.viewport}
-            onMoveEnd={(_, viewport) => {
-              try {
-                sessionStorage.setItem(
-                  `searchy:graph:${stateKey}`,
-                  JSON.stringify({ ...savedGraph(stateKey), viewport })
-                )
-              } catch {
-                /* Optional browser storage. */
-              }
-            }}
-            onEdgeClick={(_, edge) => {
-              const item = graph.edges.find((candidate) => candidate.id === edge.id)
-              if (item) select(item)
-            }}
-            onPaneClick={() => {
-              setSelected(null)
-              onSelection([])
-            }}
-            fitView={!saved.viewport}
-            minZoom={0.1}
-            maxZoom={1.7}
+            onNodeClick={(_, node) => setPreferences((p) => ({ ...p, selected: node.id }))}
+            onNodeDoubleClick={(_, node) =>
+              node.data.record.type === 'Scene' && openScene(node.data.record)
+            }
+            onEdgeClick={(_, edge) => setPreferences((p) => ({ ...p, selected: edge.id }))}
+            onPaneClick={() => setPreferences((p) => ({ ...p, selected: null }))}
+            onNodeDragStop={(_, node) =>
+              setPreferences((p) => ({
+                ...p,
+                positions: { ...p.positions, [node.id]: node.position },
+              }))
+            }
+            onMoveEnd={(_, viewport) => setPreferences((p) => ({ ...p, viewport }))}
+            defaultViewport={preferences.viewport}
+            fitView={!preferences.viewport}
+            fitViewOptions={{ padding: 0.12, minZoom: 0.85, maxZoom: 1 }}
+            minZoom={0.2}
+            maxZoom={1.6}
             nodesConnectable={false}
             edgesReconnectable={false}
             deleteKeyCode={null}
-            proOptions={{ hideAttribution: false }}
           >
-            <Background color="var(--line)" gap={22} />
-            <Controls showInteractive={false} />
+            <Background color="var(--line)" gap={24} />
+            <div className="graph-zoom-controls">
+              <button
+                className="icon-button"
+                aria-label="Zoom out graph"
+                onClick={() => void flow.zoomOut()}
+              >
+                <Minus size={16} />
+              </button>
+              <button
+                className="icon-button"
+                aria-label="Zoom in graph"
+                onClick={() => void flow.zoomIn()}
+              >
+                <Plus size={16} />
+              </button>
+              <button
+                className="icon-button"
+                aria-label="Fit graph to view"
+                onClick={() => void flow.fitView({ padding: 0.12 })}
+              >
+                <Maximize2 size={16} />
+              </button>
+            </div>
           </ReactFlow>
-        </div>
-        <aside className="evidence-inspector" aria-label="Selected evidence">
-          {selected ? (
-            <>
-              <div className="evidence-detail-heading">
-                <span className="eyebrow">{selected.type.replaceAll('_', ' ')}</span>
-                <button
-                  className="icon-button"
-                  aria-label="Clear graph selection"
-                  onClick={() => {
-                    setSelected(null)
-                    onSelection([])
-                  }}
-                >
-                  <X size={15} />
-                </button>
-              </div>
-              <h3>
-                {'label' in selected
-                  ? selected.label
-                  : selected.type.replaceAll('_', ' ').toLowerCase()}
-              </h3>
-              {'verified' in selected && selected.verified != null && (
-                <p className="small muted">
-                  {selected.verified ? 'Verified evidence' : 'Extracted evidence · unverified'}
-                </p>
-              )}
-              {selected.evidence.map((text, index) => (
-                <blockquote key={index}>{text}</blockquote>
-              ))}
-              {'properties' in selected && (
-                <dl className="evidence-properties">
-                  {Object.entries(selected.properties)
-                    .filter(
-                      ([key, value]) =>
-                        value != null &&
-                        !key.endsWith('_id') &&
-                        !['description', 'evidence', 'key', 'provenance_json', 'source'].includes(
-                          key
-                        )
-                    )
-                    .slice(0, 8)
-                    .map(([key, value]) => (
-                      <div key={key}>
-                        <dt>{key.replaceAll('_', ' ')}</dt>
-                        <dd>{String(value)}</dd>
-                      </div>
-                    ))}
-                </dl>
-              )}
-              <h4>Supporting scenes</h4>
-              {selected.scene_ids.map((id) => {
-                const scene = scenes.find((item) => item.scene_id === id)
-                return (
-                  <Link
-                    className="evidence-scene-link"
-                    key={id}
-                    to={sceneHref(id, scene?.start ?? null, origin)}
-                    onClick={onOpen}
-                  >
-                    <Film size={14} />
-                    <span>
-                      {episodeTitle(scene?.episode_id ?? null)}
-                      <small>
-                        {timestamp(scene?.start ?? null)} ·{' '}
-                        {scene?.playback.available ? 'Video available' : 'Scene details'}
-                      </small>
-                    </span>
-                  </Link>
-                )
-              })}
-            </>
-          ) : (
-            <div className="evidence-inspector-empty">
-              <ScanSearch size={27} strokeWidth={1.3} />
-              <h3>Follow the evidence.</h3>
-              <p>
-                Select a scene, person, or connection to inspect the indexed information behind it.
-              </p>
-              <p className="small">
-                Use Tab to navigate, Enter to select, and the controls to zoom or fit the graph.
-              </p>
+          {!view.nodes.length && (
+            <div className="graph-no-nodes">
+              No entities match these filters. Reset the view to show the scene evidence.
             </div>
           )}
-        </aside>
-      </div>
-      {(graph.truncated || graph.warnings.length > 0) && (
-        <div className="evidence-graph-notes">
-          {graph.truncated && (
-            <p>
-              This view is limited to keep the graph readable. Focus on fewer scenes to see more of
-              their evidence.
-            </p>
-          )}
-          {graph.warnings.map((warning) => (
-            <p key={warning}>{warning}</p>
-          ))}
         </div>
+        <EvidenceInspector
+          selected={selected}
+          nodes={graph.nodes}
+          scenes={scenes}
+          origin={origin}
+          inContext={
+            (!!selected && !!base.nodes.some((n) => n.id === selected.id)) ||
+            (!!selected && !!base.edges.some((e) => e.id === selected.id))
+          }
+          expanded={preferences.expanded}
+          busy={busy}
+          onOpen={onOpen}
+          onClear={() => setPreferences((p) => ({ ...p, selected: null }))}
+          onExpand={expand}
+          onFocus={onFocus}
+        />
+      </div>
+      {extra.some((r) => r.isError) && (
+        <div className="graph-retry">
+          <span>Some expanded evidence could not be loaded.</span>
+          <button
+            className="text-link"
+            onClick={() => extra.filter((r) => r.isError).forEach((r) => void r.refetch())}
+          >
+            Try again
+          </button>
+        </div>
+      )}
+      {(graph.truncated || view.limited || !!graph.warnings.length) && (
+        <details className="graph-limits">
+          <summary>This view is bounded to keep evidence readable</summary>
+          <p>
+            Focus a scene or expand its evidence to inspect more records. A connection records an
+            indexed association; it does not establish causality.
+          </p>
+          {graph.warnings.map((w) => (
+            <p key={w}>{w}</p>
+          ))}
+        </details>
       )}
     </div>
   )
 }
 
-export default function EvidenceGraph({
-  scenes,
-  answerGraph,
-  stateKey,
-  origin,
-  onOpen,
-  focusSceneId,
-  onSelection,
-}: {
-  scenes: SceneMatch[]
-  answerGraph?: GraphData
-  stateKey: string
-  origin: string
-  onOpen: () => void
-  collection: string
-  focusSceneId: string | null
-  onSelection: (ids: string[]) => void
-}) {
-  if (!answerGraph) return <Loading label="Preparing the answer’s evidence graph…" />
-  if (!answerGraph.nodes.length)
-    return (
-      <EmptyState title="Graph evidence is unavailable">
-        The scene results and their recorded evidence are still available.
-      </EmptyState>
-    )
+export default function EvidenceGraph(props: Props) {
   return (
-    <div className="graph-workspace">
-      <p className="muted small">
-        The indexed graph context supplied to answer generation and verification. Connections do not
-        imply causality.
-      </p>
-      <ReactFlowProvider>
-        <GraphCanvas
-          key={stateKey}
-          graph={answerGraph}
-          scenes={scenes}
-          stateKey={stateKey}
-          origin={origin}
-          onOpen={onOpen}
-          focusSceneId={focusSceneId}
-          onSelection={onSelection}
-        />
-      </ReactFlowProvider>
-    </div>
+    <ReactFlowProvider>
+      <GraphWorkspace key={props.stateKey} {...props} />
+    </ReactFlowProvider>
   )
 }

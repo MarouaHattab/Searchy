@@ -1,7 +1,8 @@
 import type { RefObject } from 'react'
 import { ChevronRight, Clapperboard, PanelLeftClose, ScanSearch, X } from 'lucide-react'
-import { Link, NavLink } from 'react-router'
+import { Link, NavLink, useLocation } from 'react-router'
 import { navigation } from './navigation'
+import { searchDestination } from '../features/player/navigation'
 
 interface SidebarProps {
   sidebarRef: RefObject<HTMLElement | null>
@@ -22,6 +23,8 @@ export function Sidebar({
   onClose,
   onToggleCollapsed,
 }: SidebarProps) {
+  const location = useLocation()
+  const searchHref = searchDestination(location.pathname, location.search)
   return (
     <aside
       ref={sidebarRef}
@@ -65,7 +68,7 @@ export function Sidebar({
               .map(({ label, to, icon: Icon }) => (
                 <NavLink
                   key={to}
-                  to={to}
+                  to={to === '/search' ? searchHref : to}
                   end={to === '/'}
                   title={collapsed ? label : undefined}
                   aria-label={collapsed ? label : undefined}
@@ -88,7 +91,7 @@ export function Sidebar({
           </span>
           <strong>A moment away.</strong>
           <p>Your collection, connected through scene and conversation.</p>
-          <Link to="/search">
+          <Link to={searchHref}>
             Start searching
             <ChevronRight size={14} />
           </Link>
