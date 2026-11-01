@@ -365,6 +365,9 @@ class GraphStore:
                 "terms": _tokens(scene.search_text()),
                 "provenance_json": json.dumps([p.model_dump() for p in scene.provenance]),
             }
+            if scene.media is not None:
+                properties["media_path"] = scene.media.path
+                properties["media_start_offset"] = scene.media.start_offset
             base_rows.append(
                 {
                     "video_id": video.video_id,

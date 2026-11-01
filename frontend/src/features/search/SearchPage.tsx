@@ -9,6 +9,8 @@ import { charactersQuery, workspaceQuery } from '../../services/queries'
 import { AnswerPanel } from './AnswerPanel'
 import { answerQueryKey, useAnswer } from './useAnswer'
 import { rankingOf, useResultScroll } from './state'
+import { mergeGraphs } from '../graph/model'
+import type { SceneMatch } from '../../types'
 import {
   canonicalSearch,
   clearSearch,
@@ -108,6 +110,10 @@ export default function SearchPage({ href, frozen = false }: { href: string; fro
   useEffect(() => {
     setDraft(query)
   }, [query])
+  const [follow, setFollow] = useState<{ question: string; sceneIds: string[] } | null>(null)
+  const [followScenes, setFollowScenes] = useState<SceneMatch[]>([])
+  const [followBusy, setFollowBusy] = useState(false)
+  const [followError, setFollowError] = useState('')
   const identity = `${query}|${collection}|${character}|${characterId}`
   const sessionId = params.get('sid') ?? ''
   const seenIdentity = useRef<string | null>(null)
@@ -119,6 +125,8 @@ export default function SearchPage({ href, frozen = false }: { href: string; fro
     if (seenIdentity.current !== identity) {
       seenIdentity.current = identity
       setHighlighted([])
+      setFollow(null)
+      setFollowScenes([])
       if (!sessionId) window.scrollTo(0, 0)
     }
   }, [identity, sessionId])
@@ -191,7 +199,84 @@ export default function SearchPage({ href, frozen = false }: { href: string; fro
     character_ids: characterId ? [characterId] : undefined,
     search_id: search.data?.search_id,
   })
+  const followAnswer = useAnswer({
+    query: follow?.question ?? '',
+    scene_ids: follow?.sceneIds ?? [],
+    collection_id: collection || undefined,
+    character_ids: characterId ? [characterId] : undefined,
+  })
+  const researchGraphData = useMemo(() => {
+    const graphs = [answer.answer?.graph, followAnswer.answer?.graph].filter(
+      (graph): graph is NonNullable<typeof graph> => !!graph && graph.nodes.length > 0
+    )
+    return graphs.length ? mergeGraphs(graphs) : undefined
+  }, [answer.answer?.graph, followAnswer.answer?.graph])
+  const graphScenes = useMemo(() => {
+    const current = search.data?.results ?? []
+    const extra = followScenes.filter(
+      (scene) => !current.some((item) => item.scene_id === scene.scene_id)
+    )
+    return [...current, ...extra]
+  }, [search.data?.results, followScenes])
+  useEffect(() => {
+    const id = search.data?.search_id
+    if (!id) return
+    try {
+      const saved = sessionStorage.getItem(`searchy:follow:${id}`)
+      if (!saved) return
+      const parsed = JSON.parse(saved) as { question?: string; sceneIds?: string[] }
+      if (parsed.question && Array.isArray(parsed.sceneIds))
+        setFollow({ question: parsed.question, sceneIds: parsed.sceneIds.slice(0, 12) })
+    } catch {
+      /* A missing follow-up leaves the original answer in place. */
+    }
+  }, [search.data?.search_id])
   useResultScroll(searchHref, !!search.data && !search.isPending)
+
+  async function askFollowUp(question: string) {
+    if (frozen || !search.data) return
+    setFollowBusy(true)
+    setFollowError('')
+    try {
+      const found = await api.search({
+        query: question,
+        limit: 8,
+        collection_id: collection || undefined,
+        characters: characterId || !character ? undefined : [character],
+        character_ids: characterId ? [characterId] : undefined,
+      })
+      const current = search.data.results.map((scene) => scene.scene_id)
+      const extra = found.results
+        .map((scene) => scene.scene_id)
+        .filter((sceneId) => !current.includes(sceneId))
+      const sceneIds = [...new Set([...current.slice(0, 4), ...extra, ...current])].slice(0, 6)
+      const next = { question, sceneIds }
+      setFollow(next)
+      setFollowScenes(found.results)
+      if (search.data.search_id)
+        sessionStorage.setItem(`searchy:follow:${search.data.search_id}`, JSON.stringify(next))
+    } catch (error) {
+      setFollowError(error instanceof ApiError ? error.message : 'The follow-up search failed.')
+    } finally {
+      setFollowBusy(false)
+    }
+  }
+  function clearFollow() {
+    setFollow(null)
+    setFollowScenes([])
+    setFollowError('')
+    const id = search.data?.search_id
+    if (!id) return
+    try {
+      sessionStorage.removeItem(`searchy:follow:${id}`)
+    } catch {
+      /* The in-memory follow-up is already cleared. */
+    }
+  }
+  function citeScene(sceneId: string) {
+    setHighlighted([sceneId])
+    setFocusSceneId(sceneId)
+  }
 
   function openScene() {
     rememberOrigin({
@@ -432,6 +517,22 @@ export default function SearchPage({ href, frozen = false }: { href: string; fro
                   retrievalWarnings={search.data.warnings}
                   origin={searchHref}
                   onOpen={openScene}
+                  onCite={citeScene}
+                  onFollowUp={(question) => void askFollowUp(question)}
+                  followPending={followBusy}
+                  followError={follow ? '' : followError}
+                />
+              )}
+              {search.data && follow && (
+                <AnswerPanel
+                  title="Follow-up"
+                  state={followAnswer}
+                  retrievalWarnings={[]}
+                  origin={searchHref}
+                  onOpen={openScene}
+                  onCite={citeScene}
+                  onDismiss={clearFollow}
+                  followError={followError}
                 />
               )}
               {!search.data?.results.length && !!search.data?.warnings.length && (
@@ -474,11 +575,11 @@ export default function SearchPage({ href, frozen = false }: { href: string; fro
                 <div id="graph-results" role="tabpanel" aria-labelledby="graph-tab">
                   <Suspense fallback={<p className="muted">Loading graph explorer…</p>}>
                     <EvidenceGraph
-                      scenes={search.data.results}
+                      scenes={graphScenes}
                       query={query}
                       characterId={characterId}
                       onFocus={setFocusSceneId}
-                      answerGraph={answer.answer?.graph}
+                      answerGraph={researchGraphData}
                       stateKey={search.data.search_id}
                       origin={searchHref}
                       onOpen={openScene}

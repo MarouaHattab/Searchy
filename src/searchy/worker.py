@@ -1,7 +1,6 @@
 import argparse
 import logging
 import threading
-import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -285,12 +284,29 @@ class Worker:
             thread.join(timeout=2)
         return True
 
+    def run_forever(self, stop_event: threading.Event) -> None:
+        while not stop_event.is_set():
+            try:
+                processed = self.run_once()
+            except Exception:
+                logger.exception("Worker cycle failed")
+                processed = False
+            if not processed:
+                stop_event.wait(self.settings.worker_poll_seconds)
+
     def process(self, job: dict, progress) -> dict:
         svc = self.services
         payload = job["payload"]
         if job["kind"] == "character_references":
             progress(0.05, "validating character references")
-            return svc.characters.prepare_references(payload["character_id"], payload["revision"])
+            prepared = svc.characters.prepare_references(
+                payload["character_id"], payload["revision"]
+            )
+            if prepared.get("accepted"):
+                progress(0.9, "queueing appearance recognition")
+                svc.recognition.start(prepared["character_id"])
+                prepared = {**prepared, "recognition_queued": True}
+            return prepared
         if job["kind"] == "character_recognition":
             return svc.recognition.process(payload["character_id"], payload["revision"], progress)
         if job["kind"] == "character_identity_sync":
@@ -394,12 +410,10 @@ def main():
     services = Services(Settings())
     worker = Worker(services)
     try:
-        while True:
-            processed = worker.run_once()
-            if args.once:
-                break
-            if not processed:
-                time.sleep(services.settings.worker_poll_seconds)
+        if args.once:
+            worker.run_once()
+        else:
+            worker.run_forever(threading.Event())
     except KeyboardInterrupt:
         pass
     finally:

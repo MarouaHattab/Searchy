@@ -17,13 +17,7 @@ uv sync --extra models --extra video
 uv run --extra models --extra video uvicorn searchy.main:app --reload
 ```
 
-In a second terminal, run one ingestion worker:
-
-```powershell
-uv run --extra models --extra video python -m searchy.worker
-```
-
-The API starts with base `uv sync` dependencies using `uv run uvicorn searchy.main:app --reload`. Model and video extras are loaded only when their features are used. Include the extras on subsequent `uv run` commands to keep them installed. The worker also accepts `--once`. Open [API docs](http://127.0.0.1:8000/docs), [Neo4j Browser](http://localhost:7474), or [Qdrant dashboard](http://localhost:6333/dashboard).
+The API starts one durable job worker by default, so imports, uploads, and custom-character recognition begin without a separate worker command. Set `WORKER_ENABLED=false` only when running a separately managed worker with `uv run --extra models --extra video python -m searchy.worker`. Model and video extras are loaded only when their features are used. Open [API docs](http://127.0.0.1:8000/docs), [Neo4j Browser](http://localhost:7474), or [Qdrant dashboard](http://localhost:6333/dashboard).
 
 Start the frontend in another terminal:
 
@@ -104,7 +98,7 @@ The Evidence graph starts with three scenes and connected people, objects and pl
 
 `POST /api/search/graph` supports independent bounded exploration. Optional `query` prioritizes relevant records within each scene; `evidence_ids` selects actual observation/dialogue identifiers. Graph reads use fixed parameterized Cypher, and answers never write inferred facts back to Neo4j. Clothing/action queries with explicit simultaneous constraints share timing checks across retrieval and answering: disjoint intervals are rejected, while missing or insufficient attribution remains partial. Episode adjacency provides timeline context only; it does not establish a causal explanation.
 
-On Characters, add a name and collection, optionally restrict it to a video, then upload up to five JPEG/PNG/WebP references (10 MB and 12 megapixels each). Reference preparation and recognition are separate durable worker jobs. Start recognition after preparation; only accessible media or sampled frames can be scanned. Review proposed matches using their actual frame and timestamp. Accepted matches are marked human-reviewed; qualified machine candidates stay unverified. Matching faces alone never establishes clothing ownership or who spoke.
+On Characters, add a name and collection, optionally restrict it to a video, then upload up to five JPEG/PNG/WebP references (10 MB and 12 megapixels each). When no collection is selected, Searchy chooses the collection with the most indexed scenes. Reference preparation and recognition are separate durable worker jobs. Start recognition after preparation; only accessible media or sampled frames can be scanned. Review proposed matches using their actual frame and timestamp. Accepted matches are marked human-reviewed; qualified machine candidates stay unverified. Matching faces alone never establishes clothing ownership or who spoke. If a character was created in the wrong collection, choose **Edit details**, change **Recognition collection**, and Searchy will clear its old scene links and queue a new scan for the selected collection.
 
 Custom identities use immutable IDs rather than names. Renaming updates scene/index labels asynchronously; description-only edits preserve recognition revisions. Replacing references validates the new image before swapping files, invalidates old identity associations, and requires another scan. Deletion removes registered associations while retaining unrelated imported evidence. Unchanged-interval imports preserve valid reviewed evidence; changed boundaries require recognition again. Cross-store writes are not atomic: an interrupted update leaves affected scenes unindexed until repaired.
 

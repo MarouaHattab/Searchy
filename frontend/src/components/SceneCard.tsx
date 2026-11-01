@@ -61,11 +61,15 @@ export function SceneCard({
     staleTime: 60_000,
   })
   const match = 'evidence' in scene ? scene : null
-  const characters = 'characters' in scene ? scene.characters : scene.matching_characters
+  const characters =
+    ('characters' in scene ? scene.characters : scene.matching_characters) ?? []
+  const evidenceTimestamp = match?.evidence_timestamps?.[0] ?? null
+  const dialogue = match?.dialogue ?? []
+  const evidence = match?.evidence ?? []
   const title = scene.episode_id
     ? sceneTitle(scene.episode_id)
     : (video.data?.title ?? 'Uploaded video')
-  const target = sceneHref(scene.scene_id, scene.start, origin)
+  const target = sceneHref(scene.scene_id, evidenceTimestamp ?? scene.start, origin)
   return (
     <article
       className={`scene-card ${compact ? 'scene-card-compact' : ''} ${selected ? 'scene-card-selected' : ''}`}
@@ -74,7 +78,7 @@ export function SceneCard({
         className="scene-image-link"
         to={target}
         onClick={onOpen}
-        aria-label={`${scene.playback.available ? 'Play' : 'View'} ${episodeTitle(scene.episode_id)} at ${timestamp(scene.start)}`}
+        aria-label={`${scene.playback.available ? 'Play' : 'View'} ${episodeTitle(scene.episode_id)} at ${timestamp(evidenceTimestamp ?? scene.start)}`}
       >
         <SceneThumbnail
           id={scene.scene_id}
@@ -82,8 +86,9 @@ export function SceneCard({
           title={`${episodeTitle(scene.episode_id)} at ${timestamp(scene.start)}`}
         />
         <span className="scene-time">
-          {timestamp(scene.start)}
-          {scene.end != null && ` – ${timestamp(scene.end)}`}
+          {evidenceTimestamp != null
+            ? `Match ${timestamp(evidenceTimestamp)} · ${timestamp(scene.start)}–${timestamp(scene.end)}`
+            : `${timestamp(scene.start)}${scene.end != null ? ` – ${timestamp(scene.end)}` : ''}`}
         </span>
       </Link>
       <div className="scene-card-content">
@@ -113,14 +118,14 @@ export function SceneCard({
             {characters.length > 3 && <span className="muted small">+{characters.length - 3}</span>}
           </div>
         )}
-        {match && !compact && match.dialogue[0] && (
+        {match && !compact && dialogue[0] && (
           <blockquote className="dialogue-quote">
             <Quote size={14} />
-            <span>{excerpt(match.dialogue[0].text, 140)}</span>
+            <span>{excerpt(dialogue[0].text, 140)}</span>
           </blockquote>
         )}
-        {match && !compact && match.evidence.length > 0 && (
-          <p className="match-evidence">{excerpt(match.evidence[0], 170)}</p>
+        {match && !compact && evidence.length > 0 && (
+          <p className="match-evidence">{excerpt(evidence[0], 170)}</p>
         )}
         <div className="scene-card-footer">
           <Badge tone={scene.playback.available ? 'blue' : 'neutral'}>

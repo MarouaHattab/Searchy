@@ -5,11 +5,12 @@ import { Link } from 'react-router'
 import { Badge, Button, ErrorState, Loading } from '../../components/ui'
 import { count, message } from '../../lib/format'
 import { apiUrl } from '../../services/api'
+import { workspaceQuery } from '../../services/queries'
 import type { Job } from '../../types'
 import { characterApi } from './api'
 import { AppearanceReview } from './AppearanceReview'
 import { ReferenceManager } from './ReferenceManager'
-import { recognitionStatus, referenceStatus } from './types'
+import { pipelineStatus, recognitionStatus, referenceStatus } from './types'
 
 export function CharacterManager({ id, onDeleted }: { id: string; onDeleted: () => void }) {
   const client = useQueryClient()
@@ -18,6 +19,7 @@ export function CharacterManager({ id, onDeleted }: { id: string; onDeleted: () 
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  const [collection, setCollection] = useState('')
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
@@ -35,6 +37,7 @@ export function CharacterManager({ id, onDeleted }: { id: string; onDeleted: () 
         : false
     },
   })
+  const workspace = useQuery(workspaceQuery)
 
   async function perform(operation: string, action: () => Promise<void>) {
     if (active.current) return
@@ -103,6 +106,7 @@ export function CharacterManager({ id, onDeleted }: { id: string; onDeleted: () 
             onClick={() => {
               setName(character.name)
               setDescription(character.description)
+              setCollection(character.collection_id)
               setEditing(!editing)
             }}
           >
@@ -117,9 +121,20 @@ export function CharacterManager({ id, onDeleted }: { id: string; onDeleted: () 
           onSubmit={(event) => {
             event.preventDefault()
             void perform('save', async () => {
-              await characterApi.update(id, { name: name.trim(), description })
+              const moved = collection !== character.collection_id
+              const updated = await characterApi.update(id, {
+                name: name.trim(),
+                description,
+                ...(moved ? { collection_id: collection } : {}),
+              })
               setEditing(false)
-              setNotice('Character details saved.')
+              setNotice(
+                moved
+                  ? updated.recognition_status === 'queued'
+                    ? `Collection changed to ${collection}. Appearance recognition is queued.`
+                    : `Collection changed to ${collection}. Run Find appearances after reference preparation.`
+                  : 'Character details saved.'
+              )
             })
           }}
         >
@@ -144,6 +159,29 @@ export function CharacterManager({ id, onDeleted }: { id: string; onDeleted: () 
               onChange={(event) => setDescription(event.target.value)}
               disabled={!!busy}
             />
+          </label>
+          <label className="field">
+            <span>Recognition collection</span>
+            <select
+              className="input"
+              value={collection}
+              onChange={(event) => setCollection(event.target.value)}
+              disabled={!!busy}
+            >
+              {workspace.data?.collections
+                .filter((item) => item.indexed_scenes > 0)
+                .map((item) => (
+                  <option key={item.collection_id} value={item.collection_id}>
+                    {item.collection_id} · {item.indexed_scenes} indexed scenes
+                  </option>
+                ))}
+              {!workspace.data?.collections.some(
+                (item) => item.collection_id === collection && item.indexed_scenes > 0
+              ) && <option value={collection}>{collection} · current</option>}
+            </select>
+            <small>
+              Changing collections clears old identity links and scans the new collection.
+            </small>
           </label>
           <div className="character-inline-actions">
             <Button
@@ -175,11 +213,13 @@ export function CharacterManager({ id, onDeleted }: { id: string; onDeleted: () 
           <span className="eyebrow">Scene recognition</span>
           <strong>
             {recognizing && <LoaderCircle size={14} className="spin" />}
-            {recognitionStatus(character.recognition_status)}
+            {pipelineStatus(character)}
           </strong>
           <p>
-            {character.video_id ? 'Limited to the selected video.' : 'Scoped to this collection.'}{' '}
-            Unknown identities are preserved.
+            {recognitionStatus(character.recognition_status)}. {character.scene_count} associated
+            scene{character.scene_count === 1 ? '' : 's'}
+            {character.review_count ? `, ${character.review_count} awaiting review` : ''}.{' '}
+            {character.video_id ? 'Limited to the selected video.' : 'Scoped to this collection.'}
           </p>
         </div>
         <Button

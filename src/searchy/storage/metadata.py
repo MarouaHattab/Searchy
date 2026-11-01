@@ -222,6 +222,25 @@ class MetadataStore:
             )
         return self.get_job(row[0])
 
+    def cancel_character_jobs(self, character_id: str) -> int:
+        now = time.time()
+        cancelled = 0
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT job_id, payload FROM jobs WHERE status IN ('queued', 'running')"
+            ).fetchall()
+            for row in rows:
+                payload = json.loads(row["payload"])
+                if payload.get("character_id") != character_id:
+                    continue
+                db.execute(
+                    """UPDATE jobs SET status='failed', stage='cancelled', error=?, updated_at=?
+                       WHERE job_id=? AND status IN ('queued', 'running')""",
+                    ("Character was deleted before this job finished", now, row["job_id"]),
+                )
+                cancelled += 1
+        return cancelled
+
     def update_job(
         self,
         job_id: str,

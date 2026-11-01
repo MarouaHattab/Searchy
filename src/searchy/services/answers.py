@@ -1,6 +1,7 @@
 import asyncio
 import json
 import re
+import time
 from pathlib import Path
 
 import anyio
@@ -144,8 +145,15 @@ class AnswerService:
             "retrieval": {
                 "strategy": "hybrid_graph_context" if include_graph else "text_evidence",
                 "graph_used": False,
+                "prompt_version": "answers-2026-10-31",
+                "graph_schema": "searchy-evidence-v1",
+                "embedding_model": self.settings.embedding_model_id,
+                "llm_provider": self.settings.llm_provider,
+                "llm_model": self.settings.llm_model_id,
+                "scene_ids": [],
             },
         }
+        started = time.perf_counter()
         scenes, blocks = [], []
         for scene_id in scene_ids[:6]:
             scene = self.metadata.get_scene(scene_id)
@@ -177,6 +185,7 @@ class AnswerService:
             response["warnings"].append(
                 "No retrieved scene contains enough evidence to answer this question."
             )
+            response["retrieval"]["elapsed_ms"] = round((time.perf_counter() - started) * 1000)
             return response, {}, scenes
         if plan.temporal and self.graph is not None and include_graph:
             try:
@@ -339,6 +348,8 @@ class AnswerService:
                 "The selected evidence exceeds the answer context budget; select fewer scenes", 422
             )
         response["retrieval"]["context_characters"] = len(json.dumps(context))
+        response["retrieval"]["scene_ids"] = [scene.scene_id for scene in scenes]
+        response["retrieval"]["elapsed_ms"] = round((time.perf_counter() - started) * 1000)
         return response, context, scenes
 
     def _select_evidence(self, scene, query, character_ids):
@@ -720,6 +731,16 @@ class AnswerService:
                 else observation.subject_id
             )
             identity = f"character_id: {explicit or 'unassigned'}; "
+            if observation.provenance.method in {
+                "sface_reference_comparison",
+                "vlm_reference_comparison",
+                "human_reviewed_character_match",
+            }:
+                identity += (
+                    "Verified identity match. "
+                    if observation.provenance.verified
+                    else "Uncertain identity match; do not treat this as a confirmed appearance. "
+                )
             if not explicit and selected and identifier in selected:
                 identity += f"Imported name label ID: {identifier}; "
             subject = f"{observation.subject}: " if observation.subject else ""

@@ -65,9 +65,31 @@ export function referenceStatus(status: ProcessingStatus) {
 export function recognitionStatus(status: ProcessingStatus) {
   return {
     unprocessed: 'Appearances not checked',
-    queued: 'Appearance search queued',
-    processing: 'Finding appearances',
-    ready: 'Appearance search complete',
-    failed: 'Appearance search failed',
+    queued: 'Recognition indexing in progress',
+    processing: 'Recognition indexing in progress',
+    ready: 'Recognition completed',
+    failed: 'Indexing failed',
   }[status]
+}
+
+export function pipelineStatus(character: {
+  status?: string | null
+  recognition_status?: string | null
+  review_count?: number
+  references?: CharacterReference[]
+}) {
+  const recognition = character.recognition_status || 'unprocessed'
+  const references = character.status || 'unprocessed'
+  if (references === 'failed' || recognition === 'failed') return 'Indexing failed'
+  if (references === 'queued' || references === 'processing') return 'Image processing'
+  if (references === 'unprocessed') return 'Image uploaded'
+  if (recognition === 'queued' || recognition === 'processing') {
+    return 'Recognition indexing in progress'
+  }
+  if (recognition === 'unprocessed') {
+    const embedded = character.references?.some((item) => item.validation === 'face_ready')
+    return embedded ? 'Reference embedding generated' : 'Image checked'
+  }
+  if ((character.review_count ?? 0) > 0) return 'Manual review required'
+  return 'Recognition completed'
 }

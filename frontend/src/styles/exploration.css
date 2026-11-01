@@ -703,3 +703,100 @@
     animation: none;
   }
 }
+.graph-view-switch {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px 20px 0;
+}
+.graph-view-switch button {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+.graph-view-switch button.active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.graph-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px 8px;
+  background: var(--surface);
+}
+.graph-search input {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  width: 140px;
+  font: inherit;
+}
+.graph-legend-inferred::before {
+  background: transparent;
+  border: 1px dashed var(--muted);
+}
+.graph-evidence-status {
+  display: inline-flex;
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.graph-evidence-status.inferred {
+  color: #8a5a12;
+}
+.graph-evidence-status.extracted {
+  color: #6d5efc;
+}
+.graph-thumb {
+  width: 100%;
+  max-height: 120px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  margin-bottom: 10px;
+}
+.graph-linked {
+  margin: 6px 0 0;
+  padding-left: 16px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.answer-follow {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.answer-follow input {
+  flex: 1;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.answer-retrieval {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+}
+.answer-retrieval div {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 8px;
+  font-size: 12px;
+}
+.answer-retrieval dt {
+  color: var(--muted);
+}
+.answer-evidence blockquote {
+  margin: 8px 0;
+  font-size: 13px;
+}

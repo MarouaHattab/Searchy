@@ -2,6 +2,7 @@ import hashlib
 import logging
 import re
 import secrets
+import threading
 from contextlib import asynccontextmanager
 from pathlib import Path
 from uuid import uuid4
@@ -30,6 +31,7 @@ from searchy.ingestion.importer import inspect_chunks
 from searchy.processing.video import VideoProcessor
 from searchy.retrieval.search import scene_view
 from searchy.services.container import Services
+from searchy.worker import Worker
 
 logger = logging.getLogger("searchy")
 
@@ -39,11 +41,37 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(application):
-        application.state.services = Services(config)
+        services = Services(config)
+        application.state.services = services
+        worker_thread = None
+        stop_worker = None
+        if config.worker_enabled:
+            stop_worker = threading.Event()
+            worker = Worker(services)
+
+            def run_worker():
+                try:
+                    worker.run_forever(stop_worker)
+                finally:
+                    services.close()
+
+            worker_thread = threading.Thread(
+                target=run_worker,
+                name="searchy-job-worker",
+                daemon=True,
+            )
+            application.state.worker_thread = worker_thread
+            worker_thread.start()
         try:
             yield
         finally:
-            application.state.services.close()
+            if worker_thread is None:
+                services.close()
+            else:
+                stop_worker.set()
+                worker_thread.join(config.worker_shutdown_timeout_seconds)
+                if worker_thread.is_alive():
+                    logger.info("Worker will stop after its active job finishes")
 
     application = FastAPI(title="Searchy", version="0.1.0", lifespan=lifespan)
     application.add_middleware(

@@ -14,6 +14,7 @@ import {
 } from '@xyflow/react'
 import {
   Box,
+  Download,
   Film,
   GitBranch,
   MapPin,
@@ -24,6 +25,7 @@ import {
   Play,
   RotateCcw,
   ScanSearch,
+  Search,
   Shirt,
   SlidersHorizontal,
   Users,
@@ -40,7 +42,9 @@ import {
   entityLabel,
   layoutGraph,
   mergeGraphs,
+  hiddenForView,
   overviewHidden,
+  researchGraph,
   readGraphState,
   relationshipLabel,
   saveGraphState,
@@ -48,6 +52,7 @@ import {
   typeLabels,
   visibleGraph,
   type GraphPreferences,
+  type ResearchView,
 } from './model'
 import type { EvidenceGraph as GraphData, EvidenceNode, SceneMatch } from '../../types'
 import '@xyflow/react/dist/style.css'
@@ -198,22 +203,36 @@ function GraphWorkspace({
       ),
     [base, extraSignature]
   )
+  const researched = useMemo(
+    () =>
+      researchGraph(graph, preferences.mode, {
+        characterId,
+        focusSceneId,
+        selectedId: preferences.selected,
+      }),
+    [graph, preferences.mode, preferences.selected, characterId, focusSceneId]
+  )
   const view = useMemo(
-    () => visibleGraph(graph, scope, preferences.hidden, preferences.hiddenEdges),
-    [graph, scope, preferences.hidden, preferences.hiddenEdges]
+    () => visibleGraph(researched, scope, preferences.hidden, preferences.hiddenEdges),
+    [researched, scope, preferences.hidden, preferences.hiddenEdges]
   )
   const selected = [...graph.nodes, ...graph.edges].find((item) => item.id === preferences.selected)
   useEffect(() => {
+    const match = focusSceneId
+      ? (graph.nodes.find(
+          (node) => node.type === 'Scene' && node.scene_ids.includes(focusSceneId)
+        )?.id ?? `Scene:${focusSceneId}`)
+      : null
     setPreferences((previous) =>
-      previous.focusedScene === focusSceneId
+      previous.focusedScene === focusSceneId && (!match || previous.selected === match)
         ? previous
         : {
             ...previous,
             focusedScene: focusSceneId,
-            selected: focusSceneId ? `Scene:${focusSceneId}` : previous.selected,
+            selected: match ?? previous.selected,
           }
     )
-  }, [focusSceneId])
+  }, [focusSceneId, graph.nodes])
   const [nodes, setNodes, onNodesChange] = useNodesState<GraphNode>([])
   const openScene = useCallback(
     (record: EvidenceNode) => {
@@ -249,10 +268,18 @@ function GraphWorkspace({
         ]
       : []
   )
+  const entityQuery = preferences.entityQuery.trim().toLowerCase()
   const displayNodes = nodes.map((node) => ({
     ...node,
     selected: node.id === selected?.id,
-    style: { opacity: selected && !connected.has(node.id) ? 0.4 : 1 },
+    style: {
+      opacity:
+        entityQuery && !node.data.label.toLowerCase().includes(entityQuery)
+          ? 0.28
+          : selected && !connected.has(node.id)
+            ? 0.4
+            : 1,
+    },
   }))
   const edges = view.edges.map((edge) => ({
     ...edge,
@@ -265,6 +292,7 @@ function GraphWorkspace({
     style: {
       stroke: edge.id === selected?.id ? 'var(--accent)' : 'var(--graph-line)',
       strokeWidth: edge.id === selected?.id ? 2 : 1.2,
+      strokeDasharray: edge.derived ? '5 4' : undefined,
       opacity: selected && !connected.has(edge.source) && !connected.has(edge.target) ? 0.25 : 1,
     },
     labelStyle: { fill: 'var(--text)', fontSize: 11 },
@@ -287,11 +315,50 @@ function GraphWorkspace({
           ),
     }))
   }
+  const setMode = (mode: ResearchView) =>
+    setPreferences((current) => ({
+      ...current,
+      mode,
+      hidden: [...hiddenForView(mode)],
+    }))
+  const exportEvidence = (format: 'json' | 'csv') => {
+    const rows = view.edges.map((edge) => ({
+      source: graph.nodes.find((node) => node.id === edge.source)?.label ?? edge.source,
+      source_id: edge.source,
+      relationship: relationshipLabel(edge.type),
+      relationship_type: edge.type,
+      target: graph.nodes.find((node) => node.id === edge.target)?.label ?? edge.target,
+      target_id: edge.target,
+      scene_ids: edge.scene_ids.join(' '),
+      status: edge.derived ? 'inferred' : 'indexed',
+      evidence: edge.evidence.join(' | '),
+    }))
+    const content =
+      format === 'json'
+        ? JSON.stringify({ nodes: view.nodes, edges: view.edges }, null, 2)
+        : [
+            Object.keys(rows[0] ?? { source: '', relationship: '', target: '' }).join(','),
+            ...rows.map((row) =>
+              Object.values(row)
+                .map((value) => `"${String(value).replaceAll('"', '""')}"`)
+                .join(',')
+            ),
+          ].join('\n')
+    const file = new Blob([content], { type: format === 'json' ? 'application/json' : 'text/csv' })
+    const url = URL.createObjectURL(file)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `searchy-evidence.${format}`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
   const reset = () => {
     const initial = {
       ...readGraphState('new'),
       hidden: [...overviewHidden],
       count: 3,
+      mode: 'overview' as const,
+      entityQuery: '',
       selected: null,
       expanded: [],
       positions: {},
@@ -330,7 +397,7 @@ function GraphWorkspace({
           <div>
             <h3>Graph evidence</h3>
             <p>
-              People, moments, and what connects them for this search
+              Indexed evidence for this search
               {scope.length ? ` · ${scope.length} ${scope.length === 1 ? 'scene' : 'scenes'}` : ''}
             </p>
           </div>
@@ -340,8 +407,41 @@ function GraphWorkspace({
           Reset view
         </Button>
       </header>
+      <div className="graph-view-switch" role="tablist" aria-label="Evidence graph views">
+        {(
+          [
+            ['overview', 'Overview'],
+            ['detail', 'Detailed evidence'],
+            ['character', 'Character'],
+            ['scene', 'Scene'],
+            ['path', 'Relationship'],
+          ] as const
+        ).map(([mode, label]) => (
+          <button
+            key={mode}
+            role="tab"
+            aria-selected={preferences.mode === mode}
+            className={preferences.mode === mode ? 'active' : ''}
+            onClick={() => setMode(mode)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
       <div className="graph-controls">
         <div className="graph-scope">
+          <label className="graph-search">
+            <Search size={14} />
+            <span className="sr-only">Search entities in this graph</span>
+            <input
+              value={preferences.entityQuery}
+              maxLength={80}
+              placeholder="Find an entity"
+              onChange={(event) =>
+                setPreferences((current) => ({ ...current, entityQuery: event.target.value }))
+              }
+            />
+          </label>
           <span>
             {view.nodes.length} nodes · {view.edges.length} connections
           </span>
@@ -378,6 +478,13 @@ function GraphWorkspace({
           >
             Labels
           </button>
+          <button className="graph-tool" onClick={() => exportEvidence('json')}>
+            <Download size={14} />
+            JSON
+          </button>
+          <button className="graph-tool" onClick={() => exportEvidence('csv')}>
+            CSV
+          </button>
         </div>
       </div>
       <div className="graph-legend" aria-label="Entity types in this graph">
@@ -388,6 +495,9 @@ function GraphWorkspace({
               {label}
             </span>
           ))}
+        {view.edges.some((edge) => edge.derived) && (
+          <span className="graph-legend-item graph-legend-inferred">Inferred summary</span>
+        )}
       </div>
       {filtersOpen && (
         <div className="graph-filter-panel">
@@ -495,13 +605,20 @@ function GraphWorkspace({
           </ReactFlow>
           {!view.nodes.length && (
             <div className="graph-no-nodes">
-              No entities match these filters. Reset the view to show the scene evidence.
+              {preferences.mode === 'path'
+                ? 'Select an entity to inspect the evidence that connects it.'
+                : preferences.mode === 'scene'
+                  ? 'Select a scene to see the people, objects, and observations recorded in it.'
+                  : preferences.mode === 'character'
+                    ? 'No indexed person matches this character filter.'
+                    : 'No entities match these filters. Reset the view to show the scene evidence.'}
             </div>
           )}
         </div>
         <EvidenceInspector
           selected={selected}
           nodes={graph.nodes}
+          edges={graph.edges}
           scenes={scenes}
           origin={origin}
           inContext={

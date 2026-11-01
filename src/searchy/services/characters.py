@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import re
+import sqlite3
 import warnings
 from io import BytesIO
 from pathlib import Path
@@ -13,6 +14,8 @@ from searchy.core.errors import InvalidInput, SearchyError
 from searchy.models.faces import OpenCVFaces
 from searchy.storage.characters import CharacterStore
 from searchy.storage.metadata import MetadataStore
+
+_UNSET = object()
 
 
 class CharacterService:
@@ -53,6 +56,20 @@ class CharacterService:
             | {"url": f"/api/characters/{character['id']}/references/{reference['id']}"}
             for reference in character["references"]
         ]
+        review_count = accepted_count = 0
+        try:
+            with self.store.connect() as db:
+                for row in db.execute(
+                    """SELECT status, COUNT(*) AS total FROM character_matches
+                       WHERE character_id=? AND revision=? AND active=1 GROUP BY status""",
+                    (character["id"], character["revision"]),
+                ):
+                    if row["status"] == "pending":
+                        review_count = row["total"]
+                    elif row["status"] == "accepted":
+                        accepted_count = row["total"]
+        except sqlite3.OperationalError:
+            review_count = accepted_count = 0
         return {
             **{
                 key: character[key]
@@ -75,6 +92,8 @@ class CharacterService:
             "scene_count": len(scenes),
             "video_count": len({scene.video_id for scene in scenes}),
             "verified_scene_count": verified,
+            "review_count": review_count,
+            "accepted_count": accepted_count,
             "origin": "custom",
         }
 
@@ -101,9 +120,24 @@ class CharacterService:
         self,
         name: str,
         description: str = "",
-        collection_id: str = "uploads",
+        collection_id: str | None = None,
         video_id: str | None = None,
     ) -> dict:
+        if collection_id is None:
+            available = [
+                collection
+                for collection in self.metadata.collections()
+                if collection["indexed_scenes"] > 0
+            ]
+            preferred = max(
+                available,
+                key=lambda collection: (
+                    collection["indexed_scenes"],
+                    collection["collection_id"],
+                ),
+                default=None,
+            )
+            collection_id = preferred["collection_id"] if preferred else "uploads"
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", collection_id):
             raise InvalidInput(
                 "Collection ID must contain 1-80 letters, digits, underscores or hyphens"
@@ -121,19 +155,53 @@ class CharacterService:
         )
 
     def update(
-        self, character_id: str, name: str | None = None, description: str | None = None
+        self,
+        character_id: str,
+        name: str | None = None,
+        description: str | None = None,
+        collection_id: str | None = None,
+        video_id: str | None | object = _UNSET,
     ) -> dict:
         character = self._get(character_id)
         values = {}
         if name is not None:
             values["name"] = self._name(name)
-        values["revision"] = character["revision"] + int(
-            values.get("name", character["name"]) != character["name"]
-        )
         if description is not None:
             if len(description) > 2000:
                 raise InvalidInput("Character description must not exceed 2000 characters")
             values["description"] = description.strip()
+
+        target_collection = collection_id or character["collection_id"]
+        target_video = character["video_id"] if video_id is _UNSET else video_id
+        scope_changed = (
+            target_collection != character["collection_id"] or target_video != character["video_id"]
+        )
+        if collection_id is not None:
+            if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", collection_id):
+                raise InvalidInput(
+                    "Collection ID must contain 1-80 letters, digits, underscores or hyphens"
+                )
+            if collection_id != character["collection_id"] and not any(
+                item["collection_id"] == collection_id and item["indexed_scenes"] > 0
+                for item in self.metadata.collections()
+            ):
+                raise InvalidInput("Choose a collection with indexed scenes")
+            values["collection_id"] = collection_id
+            if collection_id != character["collection_id"] and video_id is _UNSET:
+                target_video = None
+                values["video_id"] = None
+        if video_id is not _UNSET:
+            if target_video:
+                video = self.metadata.get_video(target_video)
+                if video is None:
+                    raise SearchyError("Video not found", 404)
+                if video.collection_id != target_collection:
+                    raise InvalidInput("Selected video does not belong to this collection")
+            values["video_id"] = target_video
+        if scope_changed:
+            values["recognition_status"] = "unprocessed"
+        identity_changed = values.get("name", character["name"]) != character["name"]
+        values["revision"] = character["revision"] + int(identity_changed or scope_changed)
         if not self.store.update(character_id, values, character["revision"]):
             raise SearchyError("Character changed during editing. Reload and try again.", 409)
         if character["status"] in {"queued", "processing"} and character["references"]:
@@ -286,6 +354,7 @@ class CharacterService:
 
     def delete(self, character_id: str) -> dict:
         character = self._get(character_id)
+        self.metadata.cancel_character_jobs(character_id)
         self.store.delete(character_id)
         for reference in character["references"]:
             path = Path(reference["path"])

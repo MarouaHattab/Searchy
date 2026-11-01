@@ -90,7 +90,15 @@ class CharacterStore:
         return self.get(identifier)
 
     def update(self, character_id: str, values: dict, revision: int | None = None) -> bool:
-        allowed = {"name", "description", "revision", "status", "recognition_status"}
+        allowed = {
+            "name",
+            "description",
+            "collection_id",
+            "video_id",
+            "revision",
+            "status",
+            "recognition_status",
+        }
         if not values or set(values) - allowed:
             raise ValueError("Unsupported character update")
         changes = {**values, "updated_at": time.time()}

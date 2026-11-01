@@ -13,7 +13,7 @@ export const characterApi = {
   create: (body: CharacterCreate) =>
     request<CustomCharacter>('/api/characters', json('POST', body)),
   detail: (id: string, signal?: AbortSignal) => request<CustomCharacter>(path(id), { signal }),
-  update: (id: string, body: { name: string; description: string }) =>
+  update: (id: string, body: { name: string; description: string; collection_id?: string }) =>
     request<CustomCharacter>(path(id), json('PATCH', body)),
   delete: (id: string) => request<{ id: string; deleted: boolean }>(path(id), { method: 'DELETE' }),
   addReferences: (id: string, files: File[]) => {

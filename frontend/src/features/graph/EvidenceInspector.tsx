@@ -1,8 +1,9 @@
 import { Maximize2, Play, ScanSearch, X } from 'lucide-react'
 import { Link } from 'react-router'
 import { episodeTitle, excerpt, timestamp } from '../../lib/format'
+import { thumbnailUrl } from '../../services/api'
 import { sceneHref } from '../player/navigation'
-import { relationshipLabel, entityLabel } from './model'
+import { evidenceClass, relationshipLabel, entityLabel } from './model'
 import type { EvidenceEdge, EvidenceNode, SceneMatch } from '../../types'
 
 const explanations: Record<string, string> = {
@@ -20,6 +21,7 @@ const nodeExplanation = (type: string) => explanations[type] ?? ''
 export function EvidenceInspector({
   selected,
   nodes,
+  edges = [],
   scenes,
   origin,
   inContext,
@@ -32,6 +34,7 @@ export function EvidenceInspector({
 }: {
   selected: EvidenceNode | EvidenceEdge | undefined
   nodes: EvidenceNode[]
+  edges?: EvidenceEdge[]
   scenes: SceneMatch[]
   origin: string
   inContext: boolean
@@ -62,6 +65,17 @@ export function EvidenceInspector({
     .filter((text) => text !== description)
     .slice(0, 4)
   const related = selected.scene_ids.slice(0, 12)
+  const status = evidenceClass(selected)
+  const linked = node
+    ? nodes.filter((item) =>
+        edges.some(
+          (edge) =>
+            (edge.source === node.id && edge.target === item.id) ||
+            (edge.target === node.id && edge.source === item.id)
+        )
+      )
+    : []
+  const preview = related[0]
   return (
     <aside className="graph-inspector" aria-label="Selected evidence">
       <header className="graph-inspector-header">
@@ -74,13 +88,13 @@ export function EvidenceInspector({
       {node && nodeExplanation(node.type) && (
         <p className="graph-source-label">{nodeExplanation(node.type)}</p>
       )}
+      <p className={`graph-evidence-status ${status.tone}`}>{status.label}</p>
+      <p className="graph-source-label">{status.detail}</p>
       <p className="graph-source-label">
         {inContext ? 'Selected answer context' : 'Additional indexed evidence'}
       </p>
-      {node?.verified != null && (
-        <span className={`graph-verification ${node.verified ? 'verified' : ''}`}>
-          {node.verified ? 'Verified record' : 'Extracted · unverified'}
-        </span>
+      {preview && (
+        <img className="graph-thumb" src={thumbnailUrl(preview)} alt="" />
       )}
       {edge && (
         <div className="graph-connection">
@@ -89,11 +103,17 @@ export function EvidenceInspector({
           <span>{excerpt(nodes.find((n) => n.id === edge.target)?.label ?? 'Target', 80)}</span>
         </div>
       )}
-      {edge?.derived && (
-        <p className="graph-source-label">
-          Summarized from indexed observations in these scenes. The times and quotes below are the
-          source.
-        </p>
+      {!!linked.length && (
+        <section>
+          <h4>Connected entities</h4>
+          <ul className="graph-linked">
+            {linked.slice(0, 8).map((item) => (
+              <li key={item.id}>
+                {entityLabel(item.type)} · {excerpt(item.label, 80)}
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
       {node?.start != null && (
         <p className="graph-time">

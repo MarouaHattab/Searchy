@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 import os
@@ -118,8 +119,16 @@ def inspect_chunks(root: Path) -> dict:
 
 
 def _caption(episode: Path, name: str, aggregate: dict, warnings: list[str]) -> tuple[str, Path]:
-    source = episode / "all_captions.json"
+    """Use the chunk's own structured caption.
+
+    ``all_captions.json`` is a fallback for a missing or unreadable chunk file.
+    A chunk file whose episode or chunk header disagrees with its directory is
+    left unused instead of being replaced by the aggregate.
+    """
+    aggregate_source = episode / "all_captions.json"
+    file_source = episode / name / "structured_caption.txt"
     item = aggregate.get(name)
+    aggregate_caption = ""
     if isinstance(item, dict):
         identifiers_match = (
             str(item.get("episode", episode.name)).strip() == episode.name.strip()
@@ -127,30 +136,40 @@ def _caption(episode: Path, name: str, aggregate: dict, warnings: list[str]) -> 
         )
         if not identifiers_match:
             warnings.append(
-                f"Conflicting episode or chunk identifier in {source} for {name}; trying caption file"
+                f"Conflicting episode or chunk identifier in {aggregate_source} for {name}; "
+                "trying caption file"
             )
         elif isinstance(item.get("caption"), str) and item["caption"].strip():
-            return item["caption"].strip(), source
+            aggregate_caption = item["caption"].strip()
     elif item is not None:
-        warnings.append(f"Ignored invalid caption entry in {source} for {name}")
-    source = episode / name / "structured_caption.txt"
-    if source.is_file():
+        warnings.append(f"Ignored invalid caption entry in {aggregate_source} for {name}")
+    if file_source.is_file():
         try:
-            text = source.read_text(encoding="utf-8-sig")
-            if text.startswith("Episode:"):
-                header, separator, body = text.partition("\n\n")
-                fields = dict(line.split(":", 1) for line in header.splitlines() if ":" in line)
-                if (
-                    fields.get("Episode", episode.name).strip() != episode.name.strip()
-                    or fields.get("Chunk", name).strip() != name
-                ):
-                    warnings.append(f"Ignored caption with conflicting identifier at {source}")
-                    return "", source
-                text = body if separator else ""
-            return text.strip(), source
+            text = file_source.read_text(encoding="utf-8-sig")
         except (OSError, UnicodeError) as exc:
-            warnings.append(f"Cannot read caption at {source}: {exc}")
-    return "", source
+            warnings.append(f"Cannot read caption at {file_source}: {exc}")
+            text = ""
+        if text.startswith("Episode:"):
+            header, separator, body = text.partition("\n\n")
+            fields = dict(line.split(":", 1) for line in header.splitlines() if ":" in line)
+            if (
+                fields.get("Episode", episode.name).strip() != episode.name.strip()
+                or fields.get("Chunk", name).strip() != name
+            ):
+                warnings.append(f"Ignored caption with conflicting identifier at {file_source}")
+                return "", file_source
+            text = body if separator else ""
+        text = text.strip()
+        if text:
+            if aggregate_caption and aggregate_caption != text:
+                warnings.append(
+                    f"{episode.name}/{name}: all_captions.json differs from structured_caption.txt; "
+                    "using the chunk file"
+                )
+            return text, file_source
+    if aggregate_caption:
+        return aggregate_caption, aggregate_source
+    return "", file_source
 
 
 def _dialogue(chunk: Path, low: float, high: float, warnings: list[str]) -> list[Dialogue]:
@@ -286,6 +305,63 @@ def _probe_duration(
         return False, None
 
 
+def _clip_timing(
+    path: Path, duration: float | None, warnings: list[str]
+) -> tuple[float, Provenance | None]:
+    source = path.parent / "media_timing.json"
+    if not source.is_file():
+        return 0.0, None
+    metadata = _read_json(source, warnings)
+    try:
+        if (
+            metadata.get("episode") != path.parent.parent.name
+            or metadata.get("chunk") != path.parent.name
+            or metadata.get("filename") != path.name
+        ):
+            raise ValueError("episode, chunk, or filename does not match")
+        offset = metadata.get("start_offset")
+        if (
+            isinstance(offset, bool)
+            or not isinstance(offset, (int, float))
+            or not math.isfinite(offset)
+            or offset < 0
+            or (duration is not None and offset >= duration)
+        ):
+            raise ValueError("invalid media start offset")
+        with path.open("rb") as stream:
+            actual_hash = hashlib.file_digest(stream, "sha256").hexdigest()
+        if metadata.get("sha256") != actual_hash:
+            raise ValueError("media SHA-256 does not match")
+        evidence = metadata.get("evidence")
+        if (
+            isinstance(evidence, dict)
+            and evidence.get("method") == "shared_encoded_video_packet_sha256"
+        ):
+            shared = evidence.get("shared_packets")
+            consensus = evidence.get("consensus_packets")
+            spread = evidence.get("spread")
+            audio = evidence.get("agreeing_audio_packets")
+            numbers = (shared, consensus, audio, spread)
+            if any(isinstance(value, bool) for value in numbers) or not (
+                isinstance(shared, int)
+                and isinstance(consensus, int)
+                and isinstance(audio, int)
+                and isinstance(spread, int | float)
+                and shared >= 3
+                and consensus / shared >= 0.8
+                and audio >= 3
+                and math.isfinite(spread)
+                and spread < 0.002
+            ):
+                raise ValueError("packet-overlap evidence is below the acceptance threshold")
+        return float(offset), Provenance(
+            source=str(source), method="inferred_clip_offset_from_encoded_packet_overlap"
+        )
+    except (OSError, ValueError) as exc:
+        warnings.append(f"Ignored invalid clip timing at {source}: {exc}")
+        return 0.0, None
+
+
 def import_chunks(
     root: Path,
     collection_id: str = "friends",
@@ -343,6 +419,7 @@ def import_chunks(
                 continue
             provenance = Provenance(source=str(caption_source), method="imported_generated_caption")
             media = None
+            timing_provenance = None
             media_files = _media_files(chunk)
             if len(media_files) > 1:
                 result.warnings.append(
@@ -351,15 +428,20 @@ def import_chunks(
             for path in media_files:
                 valid, duration = _probe_duration(path, probe, result.warnings)
                 if valid:
-                    media = Media(path=str(path.resolve()), duration=duration)
+                    offset, timing_provenance = _clip_timing(path, duration, result.warnings)
+                    media = Media(
+                        path=str(path.resolve()), duration=duration, start_offset=offset
+                    )
                     unprobed_media |= probe is None
                     break
             start: float | None = low
             end: float | None = high
             basis = "inferred_fixed_60_second_chunk"
+            if timing_provenance:
+                basis = "inferred_fixed_60_second_chunk_with_packet_aligned_media"
             if name == names[-1]:
                 if media and media.duration:
-                    end = low + media.duration
+                    end = low + media.duration - media.start_offset
                     basis = "inferred_chunk_offset_and_probed_media_duration"
                 elif dialogue:
                     end = max(line.end for line in dialogue)
@@ -368,7 +450,9 @@ def import_chunks(
                     start, end, basis = None, None, "unknown_final_chunk_duration"
             chunk_provenance = Provenance(source=str(chunk), method=basis)
             media_provenance = []
-            if full_media is not None:
+            if timing_provenance:
+                media_provenance.append(timing_provenance)
+            if media is None and full_media is not None:
                 if low < full_media.duration:
                     media = full_media.model_copy(update={"start_offset": low})
                     start, end = low, min(high, full_media.duration)
@@ -404,6 +488,15 @@ def import_chunks(
                 )
             )
         if episode_scenes:
+            attached_episode = (
+                full_media
+                if full_media is not None
+                and any(
+                    scene.media is not None and scene.media.path == full_media.path
+                    for scene in episode_scenes
+                )
+                else None
+            )
             result.videos.append(
                 Video(
                     video_id=video_id,
@@ -411,8 +504,8 @@ def import_chunks(
                     title=episode.name.strip(),
                     original_id=episode.name,
                     source_kind="import",
-                    duration=full_media.duration if full_media else None,
-                    media_path=full_media.path if full_media else None,
+                    duration=attached_episode.duration if attached_episode else None,
+                    media_path=attached_episode.path if attached_episode else None,
                 )
             )
             result.scenes.extend(episode_scenes)

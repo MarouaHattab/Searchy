@@ -591,6 +591,19 @@ class SearchEngine:
                     "description": scene.description[:700],
                     "matching_characters": scene.characters,
                     "matching_character_ids": scene.character_ids,
+                    "evidence_timestamps": sorted(
+                        {
+                            observation.start
+                            for observation in scene.observations
+                            if observation.start is not None
+                            and observation.provenance.verified
+                            and (
+                                not character_ids
+                                or observation.character_id in character_ids
+                                or observation.subject_id in character_ids
+                            )
+                        }
+                    ),
                     "dialogue": relevant_dialogue[:8],
                     "score": round(score, 6),
                     "channel_scores": matched_channels[scene_id],
@@ -626,6 +639,25 @@ class SearchEngine:
             warnings.append(
                 "A character-dialogue association is unverified because the matching speech has no supported speaker identity"
             )
+        if character_ids and not selected:
+            named = [character for character in registered if character["id"] in character_ids]
+            if named:
+                pending = [
+                    character["name"]
+                    for character in named
+                    if character.get("recognition_status") != "ready"
+                ]
+                if pending:
+                    warnings.append(
+                        f"{', '.join(pending)} has no indexed appearances yet. "
+                        "Appearance recognition has to finish before a name search can return that identity."
+                    )
+                else:
+                    warnings.append(
+                        "No indexed scenes are associated with "
+                        + ", ".join(character["name"] for character in named)
+                        + "."
+                    )
         return dict(
             query=query,
             results=selected,

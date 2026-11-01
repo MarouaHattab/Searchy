@@ -64,6 +64,7 @@ class SceneMatch(Record):
     description: str
     matching_characters: list[str]
     matching_character_ids: list[str] = Field(default_factory=list)
+    evidence_timestamps: list[float] = Field(default_factory=list)
     dialogue: list[Dialogue]
     score: float
     channel_scores: dict[str, float]
@@ -149,6 +150,8 @@ class CharacterSummary(Record):
     status: str | None = None
     recognition_status: str | None = None
     reference_count: int = 0
+    review_count: int = 0
+    accepted_count: int = 0
 
 
 class WorkspaceMetrics(Record):

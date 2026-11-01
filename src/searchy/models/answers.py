@@ -38,12 +38,16 @@ the same action in several sentences. Prefer explaining the relevant evidence to
 grounded_links summarize an observation that names both a person and an object, outfit, or activity.
 They apply only to that observation's scene and time interval. Unverified machine captions are not
 confirmed visual facts: qualify them once naturally.
+An identity observation marked unverified is an uncertain face or image match. Do not say that
+person appears unless the evidence calls the match verified or accepted.
 Co-occurrence does not establish ownership, speech, interaction or causality. A SUBJECT
 or SPOKEN_BY link applies only to its attached observation/dialogue and time interval.
 A preceding or following scene is context, not the same event. Inferred timestamps show
 video order, not narrative chronology. Never invent an episode, time, speaker or cause.
 Explain a cause only if dialogue or an explicit observation records it.
 State limitations when evidence is partial. If nothing supports an answer, return no claims.
+Comparisons and follow-up questions may use only the supplied scenes. If records disagree, say so.
+Keep a recorded observation separate from an interpretation or inferred connection.
 Do not put timestamps, source paths, HTML or citations into claim text; the server adds citations.
 """
 

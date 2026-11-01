@@ -58,6 +58,7 @@ export interface SceneDetail extends Scene {
 export interface SceneMatch extends Scene {
   matching_characters: string[]
   matching_character_ids: string[]
+  evidence_timestamps?: number[]
   score: number
   channel_scores: Record<string, number>
   evidence: string[]
@@ -78,7 +79,18 @@ export interface SearchResponse {
 export interface SearchAnswer {
   search_id: string | null
   graph: EvidenceGraph
-  retrieval: { strategy: string; graph_used: boolean; context_characters?: number }
+  retrieval: {
+    strategy: string
+    graph_used: boolean
+    context_characters?: number
+    prompt_version?: string
+    graph_schema?: string
+    embedding_model?: string
+    llm_provider?: string
+    llm_model?: string
+    scene_ids?: string[]
+    elapsed_ms?: number
+  }
   status: 'generated' | 'unavailable' | 'insufficient_evidence'
   answer: string
   markdown: string
@@ -233,6 +245,8 @@ export interface Character {
   recognition_status?: string | null
   revision?: number | null
   reference_count?: number
+  review_count?: number
+  accepted_count?: number
 }
 
 export interface Job {

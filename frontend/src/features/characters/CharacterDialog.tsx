@@ -25,6 +25,7 @@ export function CharacterDialog({
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [collection, setCollection] = useState('uploads')
+  const collectionEdited = useRef(false)
   const [video, setVideo] = useState('')
   const [files, setFiles] = useState<File[]>([])
   const [busy, setBusy] = useState(false)
@@ -41,6 +42,7 @@ export function CharacterDialog({
     if (open) {
       setName('')
       setDescription('')
+      collectionEdited.current = false
       setCollection('uploads')
       setVideo('')
       setFiles([])
@@ -53,9 +55,22 @@ export function CharacterDialog({
     }
   }, [open])
 
+  useEffect(() => {
+    if (!open || saved || collectionEdited.current) return
+    const preferred = [...(workspace.data?.collections ?? [])].sort(
+      (left, right) => right.indexed_scenes - left.indexed_scenes
+    )[0]
+    if (preferred && preferred.indexed_scenes > 0) setCollection(preferred.collection_id)
+  }, [open, saved, workspace.data])
+
   async function submit() {
     if (active.current || !name.trim()) return
-    if (!/^[a-zA-Z0-9_-]{1,80}$/.test(collection)) {
+    const preferred = [...(workspace.data?.collections ?? [])]
+      .filter((item) => item.indexed_scenes > 0)
+      .sort((left, right) => right.indexed_scenes - left.indexed_scenes)[0]
+    const collectionId =
+      !collectionEdited.current && preferred ? preferred.collection_id : collection
+    if (!/^[a-zA-Z0-9_-]{1,80}$/.test(collectionId)) {
       setError('Use 1–80 letters, numbers, hyphens or underscores for the collection.')
       return
     }
@@ -68,7 +83,7 @@ export function CharacterDialog({
         character = await characterApi.create({
           name: name.trim(),
           description: description.trim(),
-          collection_id: collection,
+          collection_id: collectionId,
           video_id: video || undefined,
         })
         setSaved(character)
@@ -156,6 +171,7 @@ export function CharacterDialog({
               value={collection}
               disabled={busy || !!saved}
               onChange={(event) => {
+                collectionEdited.current = true
                 setCollection(event.target.value)
                 setVideo('')
               }}
@@ -235,7 +251,15 @@ export function CharacterDialog({
           >
             {saved ? 'Manage saved character' : 'Cancel'}
           </Button>
-          <Button type="submit" disabled={busy || !name.trim() || !collection.trim()}>
+          <Button
+            type="submit"
+            disabled={
+              busy ||
+              !name.trim() ||
+              !collection.trim() ||
+              (!collectionEdited.current && workspace.isPending)
+            }
+          >
             {busy ? <LoaderCircle size={16} className="spin" /> : <UserPlus size={16} />}{' '}
             {busy
               ? saved

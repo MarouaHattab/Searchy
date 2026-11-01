@@ -173,9 +173,9 @@ class RecognitionService:
             return frames
         processor = VideoProcessor(self.settings)
         path = Path(scene.media.path)
-        metadata = processor.probe(path)
         start = scene.media.start_offset
-        end = min(metadata.duration, start + scene.end - scene.start)
+        duration = scene.media.duration or processor.probe(path).duration
+        end = min(duration, start + scene.end - scene.start)
         if end <= start:
             return []
         cache = self.settings.data_dir / "processing" / "recognition_frames" / scene.scene_id
@@ -552,12 +552,20 @@ class RecognitionService:
             ):
                 continue
             accepted = row["status"] == "accepted"
+            evidence = row["evidence"]
+            if accepted:
+                for marker in (
+                    " This is a model candidate, not a verified identity.",
+                    " Identity is an unverified comparison with the supplied character references.",
+                ):
+                    evidence = evidence.split(marker, 1)[0]
+                evidence += " This appearance was human-reviewed and confirmed against the supplied reference."
             scene.observations.append(
                 Observation(
                     kind="character",
                     value=character["name"],
                     character_id=character["id"],
-                    evidence=row["evidence"],
+                    evidence=evidence,
                     start=row["timestamp"],
                     end=row["timestamp"],
                     provenance=Provenance(

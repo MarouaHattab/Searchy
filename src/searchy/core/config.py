@@ -48,7 +48,9 @@ class Settings(BaseSettings):
     frames_per_scene: int = Field(default=3, ge=1, le=8)
     provider_timeout_seconds: float = Field(default=90, gt=0)
     vlm_max_images: int | None = Field(default=None, ge=1, le=32)
+    worker_enabled: bool = True
     worker_poll_seconds: float = Field(default=2, gt=0)
+    worker_shutdown_timeout_seconds: float = Field(default=10, gt=0)
     job_lease_seconds: int = Field(default=120, ge=30)
     candidate_limit: int = Field(default=80, ge=10, le=500)
     semantic_min_score: float = Field(default=0.45, ge=-1, le=1)

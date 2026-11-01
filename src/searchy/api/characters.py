@@ -14,13 +14,15 @@ from searchy.services.characters import CharacterService
 class CharacterCreate(Record):
     name: str = Field(min_length=1, max_length=100)
     description: str = Field(default="", max_length=2000)
-    collection_id: str = Field(default="uploads", pattern=r"^[a-zA-Z0-9_-]{1,80}$")
+    collection_id: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_-]{1,80}$")
     video_id: str | None = Field(default=None, max_length=100)
 
 
 class CharacterEdit(Record):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
+    collection_id: str | None = Field(default=None, pattern=r"^[a-zA-Z0-9_-]{1,80}$")
+    video_id: str | None = Field(default=None, max_length=100)
 
 
 class CharacterReference(Record):
@@ -49,6 +51,8 @@ class CharacterDetails(Record):
     scene_count: int
     video_count: int
     verified_scene_count: int
+    review_count: int = 0
+    accepted_count: int = 0
     origin: Literal["custom"]
 
 
@@ -108,7 +112,17 @@ def create_character_router(settings, services, authorize) -> APIRouter:
         character_id: str, body: CharacterEdit, service=Depends(characters), svc=Depends(services)
     ):
         previous = service.get(character_id)
-        character = service.update(character_id, **body.model_dump(exclude_unset=True))
+        changes = body.model_dump(exclude_unset=True)
+        scope_changed = (
+            changes.get("collection_id") is not None
+            and changes["collection_id"] != previous["collection_id"]
+        ) or (changes.get("video_id", previous["video_id"]) != previous["video_id"])
+        character = service.update(character_id, **changes)
+        if scope_changed:
+            svc.recognition.remove_identity(character_id)
+            if character["status"] == "ready" and character["references"]:
+                svc.recognition.start(character_id)
+            character = service.get(character_id)
         if character["name"] != previous["name"]:
             svc.metadata.create_job(
                 "character_identity_sync",

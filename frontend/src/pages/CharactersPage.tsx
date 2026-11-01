@@ -18,7 +18,7 @@ import { charactersQuery } from '../services/queries'
 import type { Character } from '../types'
 import { CharacterDialog } from '../features/characters/CharacterDialog'
 import { CharacterManager } from '../features/characters/CharacterManager'
-import { isCustomCharacter, recognitionStatus } from '../features/characters/types'
+import { isCustomCharacter, pipelineStatus } from '../features/characters/types'
 import '../styles/management.css'
 import '../styles/characters.css'
 
@@ -236,7 +236,10 @@ export default function CharactersPage() {
                         {character.collection_id} · {count(character.scene_count)} scenes
                       </span>
                       <span className="registered-character-status">
-                        {recognitionStatus(character.recognition_status || 'unprocessed')}
+                        {pipelineStatus(character)}
+                        {character.scene_count
+                          ? ` · ${count(character.scene_count)} detected`
+                          : ''}
                       </span>
                     </span>
                     <ArrowRight size={16} className="character-card-arrow" />
