@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1460" height="790" viewBox="0 0 1460 790" role="img" aria-labelledby="title desc">
+<title id="title">Phase 06 · Grounded AI Answer Generation</title>
+<desc id="desc">Model output is treated as a draft; only source-linked, checked claims are returned</desc>
+<defs><marker id="arrow" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,4 L0,8 z" fill="#62748A"/></marker><marker id="arrow-start" markerWidth="10" markerHeight="8" refX="1" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M10,0 L0,4 L10,8 z" fill="#62748A"/></marker><filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#263B53" flood-opacity=".08"/></filter></defs>
+<rect width="1460" height="790" rx="20" fill="#F7F9FC"/>
+<text x="58" y="48" font-family="Arial, sans-serif" font-size="12" font-weight="700" letter-spacing="1.7" fill="#4773C8">SEARCHY ARCHITECTURE</text>
+<text x="58" y="88" font-family="Arial, sans-serif" font-size="27" font-weight="700" fill="#15263B">Phase 06 · Grounded AI Answer Generation</text>
+<text x="58" y="119" font-family="Arial, sans-serif" font-size="14" fill="#65758A">Model output is treated as a draft; only source-linked, checked claims are returned</text>
+<line x1="58" y1="139" x2="1402" y2="139" stroke="#E2E8F0" stroke-width="1.5"/>
+<path d="M275.0,387.5 C295.4,387.5 339.6,387.5 360.0,387.5" fill="none" stroke="#8795A7" stroke-width="2" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="255.9" y="370.5" width="123.1" height="20" rx="7" fill="#F7F9FC" opacity=".96"/>
+<text x="317.5" y="384.5" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="600" fill="#62748A">bounded selection</text>
+<path d="M620.0,382.5 C639.2,382.5 680.8,379.5 700.0,379.5" fill="none" stroke="#8795A7" stroke-width="2" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="598.5" y="364.0" width="123.1" height="20" rx="7" fill="#F7F9FC" opacity=".96"/>
+<text x="660.0" y="378.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="600" fill="#62748A">structured prompt</text>
+<path d="M935.0,336.7 C954.2,336.7 995.8,310.7 1015.0,310.7" fill="none" stroke="#8795A7" stroke-width="2" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="929.2" y="306.7" width="91.6" height="20" rx="7" fill="#F7F9FC" opacity=".96"/>
+<text x="975.0" y="320.7" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="600" fill="#62748A">draft claims</text>
+<path d="M1140.0,360.0 C1140.0,360.0 1140.0,465.0 1140.0,465.0" fill="none" stroke="#8795A7" stroke-width="2" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="1065.8" y="395.5" width="148.3" height="20" rx="7" fill="#F7F9FC" opacity=".96"/>
+<text x="1140.0" y="409.5" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="600" fill="#62748A">citation-valid claims</text>
+<path d="M1265.0,468.6 C1273.4,468.6 1291.6,447.9 1300.0,447.9" fill="none" stroke="#8795A7" stroke-width="2" stroke-linecap="round" marker-end="url(#arrow)"/>
+<rect x="1227.2" y="441.2" width="110.5" height="20" rx="7" fill="#F7F9FC" opacity=".96"/>
+<text x="1282.5" y="455.2" text-anchor="middle" font-family="Arial, sans-serif" font-size="11" font-weight="600" fill="#62748A">accepted claims</text>
+<g filter="url(#shadow)"><rect x="55" y="315" width="220" height="145" rx="15" fill="#E8F0FF" stroke="#4773C8" stroke-width="1.6"/></g>
+<text x="71" y="345" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#1B2D42">Ranked scenes</text>
+<text x="71" y="372" font-family="Arial, sans-serif" font-size="12.5" fill="#52657B">selected scene IDs</text>
+<text x="71" y="391" font-family="Arial, sans-serif" font-size="12.5" fill="#52657B">query + collection scope</text>
+<g filter="url(#shadow)"><rect x="360" y="300" width="260" height="175" rx="15" fill="#F1F6E8" stroke="#779B4C" stroke-width="1.6"/></g>
+<text x="376" y="330" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#1B2D42">Evidence context</text>
+<text x="376" y="357" font-family="Arial, sans-serif" font-size="12.5" fill="#52657B">relevant dialogue and</text>
+<text x="376" y="376" font-family="Arial, sans-serif" font-size="12.5" fill="#52657B">observations · graph links</text>
+<text x="376" y="395" font-family="Arial, sans-serif" font-size="12.5" fill="#52657B">bounded character budget</text>
+<g filter="url(#shadow)"><rect x="700" y="300" width="235" height="150" rx="15" fill="#F3EDFF" stroke="#8564C5" stroke-width="1.6"/></g>
+<text x="716" y="330" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#1B2D42">Gemini / Groq</text>
+<text x="716" y="357" font-family="Arial, sans-serif" font-size="12.5" fill="#52657B">draft claims from supplied</text>
+<text x="716" y="376" font-family="Arial, sans-serif" font-size="12.5" fill="#52657B">context only</text>
+<g filter="url(#shadow)"><rect x="1015" y="180" width="250" height="180" rx="15" fill="#EAF8F6" stroke="#309B90" stroke-width="1.6"/></g>
+<text x="1031" y="210" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#1B2D42">Claim validation</text>
+<text x="1031" y="237" font-family="Arial, sans-serif" font-size="12.5" fill="#52657B">source ID exists</text>
+<text x="1031" y="256" font-family="Arial, sans-serif" font-size="12.5" fill="#52657B">exact evidence quote</text>
+<text x="1031" y="275" font-family="Arial, sans-serif" font-size="12.5" fill="#52657B">constraint and citation checks</text>
+<g filter="url(#shadow)"><rect x="1015" y="465" width="250" height="155" rx="15" fill="#F3EDFF" stroke="#8564C5" stroke-width="1.6"/></g>
+<text x="1031" y="495" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#1B2D42">Provider entailment check</text>
+<text x="1031" y="522" font-family="Arial, sans-serif" font-size="12.5" fill="#52657B">separate verification call</text>
+<text x="1031" y="541" font-family="Arial, sans-serif" font-size="12.5" fill="#52657B">fallible; not a guarantee</text>
+<g filter="url(#shadow)"><rect x="1300" y="315" width="145" height="180" rx="15" fill="#F1F6E8" stroke="#779B4C" stroke-width="1.6"/></g>
+<text x="1316" y="345" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#1B2D42">Verified response</text>
+<text x="1316" y="372" font-family="Arial, sans-serif" font-size="12.5" fill="#52657B">claims + citations</text>
+<text x="1316" y="391" font-family="Arial, sans-serif" font-size="12.5" fill="#52657B">evidence intervals</text>
+<text x="1316" y="410" font-family="Arial, sans-serif" font-size="12.5" fill="#52657B">SSE streams checked claims</text>
+</svg>

@@ -1,0 +1,98 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="app.diagrams.net" modified="2026-11-01T01:49:01.708365+00:00" agent="Searchy documentation" version="24.7.17" type="device">
+  <diagram id="searchy-overall-architecture" name="Searchy · Overall Architecture">
+    <mxGraphModel dx="1480" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1480" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="heading" value="&lt;b&gt;Searchy · Overall Architecture&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=23;fontColor=#15263B;fontFamily=Arial;" vertex="1" parent="1">
+          <mxGeometry x="58" y="38" width="1364" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="Two ingestion paths, one scene model, three stores, and evidence-led search" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=13;fontColor=#65758A;fontFamily=Arial;" vertex="1" parent="1">
+          <mxGeometry x="58" y="78" width="1364" height="38" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-chunks-api" value="import" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;" edge="1" parent="1" source="chunks" target="api">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-upload-api" value="queued upload" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;" edge="1" parent="1" source="upload" target="api">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-api-process" value="upload job" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;" edge="1" parent="1" source="api" target="process">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-api-import" value="import job" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;" edge="1" parent="1" source="api" target="import">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-process-scene" value="validated scenes" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;" edge="1" parent="1" source="process" target="scene">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-import-scene" value="normalized records" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;" edge="1" parent="1" source="import" target="scene">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-scene-sqlite" value="metadata" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;" edge="1" parent="1" source="scene" target="sqlite">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-scene-neo" value="graph indexing" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;" edge="1" parent="1" source="scene" target="neo">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-scene-qdrant" value="vector indexing" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;" edge="1" parent="1" source="scene" target="qdrant">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-ui-search" value="typed API" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;" edge="1" parent="1" source="ui" target="search">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-search-retrieve" value="query plan" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;" edge="1" parent="1" source="search" target="retrieve">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-retrieve-neo" value="graph lookup" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;startArrow=classic;startFill=1;" edge="1" parent="1" source="retrieve" target="neo">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-retrieve-qdrant" value="semantic / visual" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;startArrow=classic;startFill=1;" edge="1" parent="1" source="retrieve" target="qdrant">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-retrieve-results" value="ranked evidence" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;" edge="1" parent="1" source="retrieve" target="results">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="chunks" value="&lt;b&gt;Processed chunks&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;captions · dialogue&lt;br&gt;existing clips · metadata&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#F1F5F9;strokeColor=#64748B;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="55" y="165" width="225" height="140" as="geometry" />
+        </mxCell>
+        <mxCell id="upload" value="&lt;b&gt;Video upload&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;type/size checks&lt;br&gt;streamed to local storage&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#F1F5F9;strokeColor=#64748B;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="55" y="405" width="225" height="135" as="geometry" />
+        </mxCell>
+        <mxCell id="api" value="&lt;b&gt;FastAPI + job queue&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;import / upload APIs&lt;br&gt;SQLite-backed job state&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#E8F0FF;strokeColor=#4773C8;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="350" y="280" width="235" height="175" as="geometry" />
+        </mxCell>
+        <mxCell id="process" value="&lt;b&gt;Uploaded-video pipeline&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;FFprobe · shot boundaries&lt;br&gt;Whisper · sampled frames&lt;br&gt;provider visual analysis&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#EAF8F6;strokeColor=#309B90;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="640" y="175" width="265" height="190" as="geometry" />
+        </mxCell>
+        <mxCell id="import" value="&lt;b&gt;Chunk importer&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;inspect source records&lt;br&gt;reuse captions, dialogue,&lt;br&gt;references, and available media&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#EAF8F6;strokeColor=#309B90;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="640" y="435" width="265" height="170" as="geometry" />
+        </mxCell>
+        <mxCell id="scene" value="&lt;b&gt;Canonical scene records&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;Video · Scene · Dialogue&lt;br&gt;Observation · provenance&lt;br&gt;validated time intervals&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#F1F6E8;strokeColor=#779B4C;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="965" y="295" width="240" height="175" as="geometry" />
+        </mxCell>
+        <mxCell id="sqlite" value="&lt;b&gt;SQLite&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;metadata · indexed state&lt;br&gt;jobs · search sessions&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#EEF2F6;strokeColor=#63758B;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1250" y="155" width="190" height="135" as="geometry" />
+        </mxCell>
+        <mxCell id="neo" value="&lt;b&gt;Neo4j&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;scene-scoped graph&lt;br&gt;entities · evidence links&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#EAF5FC;strokeColor=#3785B6;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1250" y="365" width="190" height="135" as="geometry" />
+        </mxCell>
+        <mxCell id="qdrant" value="&lt;b&gt;Qdrant&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;named text vectors&lt;br&gt;optional visual vectors&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#FFF3E5;strokeColor=#D18B3A;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1250" y="575" width="190" height="135" as="geometry" />
+        </mxCell>
+        <mxCell id="ui" value="&lt;b&gt;React application&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;search · library · player&lt;br&gt;characters · graph evidence&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#E8F0FF;strokeColor=#4773C8;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="750" width="240" height="135" as="geometry" />
+        </mxCell>
+        <mxCell id="search" value="&lt;b&gt;Search + answer APIs&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;query plan · filters&lt;br&gt;ranked scenes · verified claims&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#E8F0FF;strokeColor=#4773C8;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="405" y="735" width="255" height="165" as="geometry" />
+        </mxCell>
+        <mxCell id="retrieve" value="&lt;b&gt;Hybrid retrieval&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;Qdrant + Neo4j candidates&lt;br&gt;RRF · deterministic checks&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#EAF8F6;strokeColor=#309B90;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="755" y="725" width="260" height="160" as="geometry" />
+        </mxCell>
+        <mxCell id="results" value="&lt;b&gt;Evidence + playback&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;scene metadata · citations&lt;br&gt;media only when available&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#F1F6E8;strokeColor=#779B4C;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1090" y="815" width="270" height="105" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

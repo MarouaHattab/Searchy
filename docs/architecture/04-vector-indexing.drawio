@@ -1,0 +1,53 @@
+<?xml version='1.0' encoding='utf-8'?>
+<mxfile host="app.diagrams.net" modified="2026-11-01T01:49:01.718733+00:00" agent="Searchy documentation" version="24.7.17" type="device">
+  <diagram id="04-vector-indexing" name="Phase 04 · Text &amp; Optional Visual Vector Indexing">
+    <mxGraphModel dx="1400" dy="740" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="740" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="heading" value="&lt;b&gt;Phase 04 · Text &amp;amp; Optional Visual Vector Indexing&lt;/b&gt;" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=23;fontColor=#15263B;fontFamily=Arial;" vertex="1" parent="1">
+          <mxGeometry x="58" y="38" width="1284" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" value="Named vectors separate local semantic text retrieval from opt-in frame similarity" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;fontSize=13;fontColor=#65758A;fontFamily=Arial;" vertex="1" parent="1">
+          <mxGeometry x="58" y="78" width="1284" height="38" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-scene-text" value="embed searchable text" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;" edge="1" parent="1" source="scene" target="text">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-scene-image" value="available frames" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;dashed=1;dashPattern=7 6;" edge="1" parent="1" source="scene" target="image">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-text-textmodel" value="embed documents" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;" edge="1" parent="1" source="text" target="textmodel">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-image-imagemodel" value="encode frames" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;dashed=1;dashPattern=7 6;" edge="1" parent="1" source="image" target="imagemodel">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-textmodel-qdrant" value="normalized text vectors" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;" edge="1" parent="1" source="textmodel" target="qdrant">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-imagemodel-qdrant" value="visual vectors" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#8795A7;strokeWidth=2;endArrow=classic;endFill=1;fontColor=#52657B;fontSize=11;fontFamily=Arial;labelBackgroundColor=#F7F9FC;dashed=1;dashPattern=7 6;" edge="1" parent="1" source="imagemodel" target="qdrant">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="scene" value="&lt;b&gt;Validated Scene&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;description · dialogue&lt;br&gt;observations · sampled frames&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#F1F6E8;strokeColor=#779B4C;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="55" y="295" width="220" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="text" value="&lt;b&gt;Text representation&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;scene description + typed&lt;br&gt;observations + dialogue&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#EAF8F6;strokeColor=#309B90;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="350" y="170" width="240" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="image" value="&lt;b&gt;Frame representation&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;sampled scene frames&lt;br&gt;only when visual is enabled&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#EAF8F6;strokeColor=#309B90;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="350" y="435" width="240" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="textmodel" value="&lt;b&gt;Local text model&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;sentence-transformers&lt;br&gt;EmbeddingGemma by default&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#F3EDFF;strokeColor=#8564C5;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="675" y="170" width="245" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="imagemodel" value="&lt;b&gt;CLIP-compatible model&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;image and text vectors&lt;br&gt;optional; disabled by default&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#F3EDFF;strokeColor=#8564C5;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="675" y="435" width="245" height="145" as="geometry" />
+        </mxCell>
+        <mxCell id="qdrant" value="&lt;b&gt;Qdrant named vectors&lt;/b&gt;&lt;br&gt;&lt;font color=&quot;#52657B&quot; style=&quot;font-size:11px&quot;&gt;text vector: configured model&lt;br&gt;visual vector: optional model&lt;br&gt;scene/collection filters&lt;/font&gt;" style="rounded=1;arcSize=12;whiteSpace=wrap;html=1;align=left;verticalAlign=middle;spacingLeft=15;spacingRight=12;fillColor=#FFF3E5;strokeColor=#D18B3A;strokeWidth=2;fontColor=#1B2D42;fontSize=14;fontFamily=Arial;shadow=1;" vertex="1" parent="1">
+          <mxGeometry x="1020" y="285" width="300" height="175" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
