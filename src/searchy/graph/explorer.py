@@ -1,7 +1,14 @@
 import math
+import re
 from collections import defaultdict
 
-from searchy.api.exploration import GraphEdge, GraphNode, GraphRequest, GraphResponse
+from searchy.api.exploration import (
+    GraphEdge,
+    GraphNode,
+    GraphRequest,
+    GraphResponse,
+    GraphSupport,
+)
 from searchy.core.errors import InvalidInput, SearchyError
 from searchy.domain import stable_id
 from searchy.retrieval.search import normalized_terms
@@ -139,7 +146,7 @@ _PROPERTIES = {
         "timestamp_basis",
         "description",
     },
-    "Video": {"video_id", "collection_id", "title", "source_kind", "duration"},
+    "Video": {"video_id", "collection_id", "title", "source_kind", "duration", "original_id"},
     "Episode": {"episode_id", "collection_id", "original_id"},
     "Observation": {
         "observation_id",
@@ -156,6 +163,7 @@ _PROPERTIES = {
         "model",
         "confidence",
         "verified",
+        "source",
     },
     "Dialogue": {
         "dialogue_id",
@@ -169,6 +177,7 @@ _PROPERTIES = {
         "model",
         "confidence",
         "verified",
+        "source",
     },
     **{
         kind: {"key", "name", "normalized"}
@@ -185,6 +194,17 @@ _EDGE_TYPES = {
     "OCCURS_AT",
     "APPEARS_IN",
     "SPOKEN_BY",
+}
+_EDGE_EXPLANATIONS = {
+    "PART_OF": "The stored hierarchy links this scene, episode, or video.",
+    "HAS_OBSERVATION": "This observation is stored under the scene.",
+    "HAS_DIALOGUE": "This transcript segment is stored under the scene.",
+    "DESCRIBES": "The observation describes this indexed entity.",
+    "SUBJECT": "The observation is attributed to this indexed subject.",
+    "CONTAINS": "The stored scene relationship associates this object with the scene.",
+    "OCCURS_AT": "The stored scene relationship associates this place with the scene.",
+    "APPEARS_IN": "The stored scene relationship associates this person with the scene.",
+    "SPOKEN_BY": "The transcript associates this dialogue segment with this speaker.",
 }
 _ORDER = {kind: index for index, kind in enumerate(_IDENTIFIERS)}
 
@@ -208,6 +228,22 @@ def _number(value) -> float | None:
 def _evidence(properties: dict) -> list[str]:
     text = properties.get("evidence") or properties.get("text") or properties.get("description")
     return [text] if isinstance(text, str) and text else []
+
+
+def _source_reference(value) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    reference = value.strip().split("?", 1)[0].split("#", 1)[0]
+    name = reference.replace("\\", "/").rsplit("/", 1)[-1]
+    if name in {"", ".", ".."}:
+        return None
+    return "".join(character for character in name if character.isprintable())[:160] or None
+
+
+def _uploaded_sha256(value) -> str | None:
+    if isinstance(value, str) and re.fullmatch(r"[a-fA-F0-9]{64}", value):
+        return value.lower()
+    return None
 
 
 class _Subgraph:
@@ -236,6 +272,17 @@ class _Subgraph:
             if key in _PROPERTIES[kind]
             and (value is None or isinstance(value, (str, int, float, bool)))
         }
+        source = safe.pop("source", None)
+        source_chunk = safe.pop("source_chunk", None)
+        source_reference = _source_reference(source)
+        if source_reference is None and kind == "Scene":
+            source_reference = _source_reference(source_chunk)
+        if source_reference is not None:
+            safe["source_reference"] = source_reference
+        if kind == "Video":
+            digest = _uploaded_sha256(safe.pop("original_id", None))
+            if digest:
+                safe["content_sha256"] = digest
         label = (
             safe.get("name")
             or safe.get("value")
@@ -244,11 +291,12 @@ class _Subgraph:
             or safe.get("original_id")
         )
         if kind == "Scene":
+            chunk_reference = _source_reference(properties.get("source_chunk"))
             label = (
                 " · ".join(
-                    str(properties[key])
-                    for key in ("episode_id", "source_chunk")
-                    if properties.get(key)
+                    str(value)
+                    for value in (properties.get("episode_id"), chunk_reference)
+                    if value
                 )
                 or properties.get("description")
                 or "Scene"
@@ -269,16 +317,65 @@ class _Subgraph:
             else None,
         )
 
-    def edge(self, raw: dict, scene_id: str, evidence: list[str] | None = None):
+    def support(self, raw: dict | None, scene_id: str) -> GraphSupport | None:
+        scene = self.nodes.get(f"Scene:{scene_id}")
+        if scene is None:
+            return None
+        identity = _identity(raw or {})
+        kind = identity[0] if identity else "Scene"
+        if kind not in {"Scene", "Observation", "Dialogue"}:
+            kind = "Scene"
+            raw = None
+        properties = (raw or {}).get("properties", {})
+        identity = _identity(raw or {}) if raw else None
+        evidence_id = identity[1] if identity else scene.id
+        start = _number(properties.get("start"))
+        end = _number(properties.get("end"))
+        confidence = _number(properties.get("confidence"))
+        return GraphSupport(
+            evidence_id=evidence_id,
+            kind=kind,
+            scene_id=scene_id,
+            recording_id=scene.properties.get("video_id")
+            if isinstance(scene.properties.get("video_id"), str)
+            else None,
+            source_reference=_source_reference(
+                properties.get("source") or properties.get("source_chunk")
+            ),
+            start=start,
+            end=end,
+            timestamp_basis=(
+                scene.properties.get("timestamp_basis")
+                if isinstance(scene.properties.get("timestamp_basis"), str)
+                else None
+            ),
+            method=properties.get("method") if isinstance(properties.get("method"), str) else None,
+            model=properties.get("model") if isinstance(properties.get("model"), str) else None,
+            confidence=confidence if confidence is not None and 0 <= confidence <= 1 else None,
+            verified=properties.get("verified")
+            if isinstance(properties.get("verified"), bool)
+            else None,
+        )
+
+    def edge(
+        self,
+        raw: dict,
+        scene_id: str,
+        evidence: list[str] | None = None,
+        support_raw: dict | None = None,
+    ):
         source, target = _identity(raw.get("source", {})), _identity(raw.get("target", {}))
         kind = raw.get("type")
         if not source or not target or kind not in _EDGE_TYPES:
             return
         identifier = stable_id(f"exploration-edge:{source[1]}:{kind}:{target[1]}")
+        support = self.support(support_raw, scene_id)
         if identifier in self.edges:
             current = self.edges[identifier]
             current.scene_ids = sorted(set(current.scene_ids + [scene_id]))
             current.evidence = sorted(set(current.evidence + (evidence or [])))
+            if support and support not in current.supports:
+                current.supports.append(support)
         else:
             self.edges[identifier] = GraphEdge(
                 id=identifier,
@@ -287,6 +384,8 @@ class _Subgraph:
                 type=kind,
                 scene_ids=[scene_id],
                 evidence=evidence or [],
+                explanation=_EDGE_EXPLANATIONS[kind],
+                supports=[support] if support else [],
             )
 
     def response(self, request: GraphRequest, truncated: bool) -> GraphResponse:
@@ -299,16 +398,29 @@ class _Subgraph:
             item for item in edges if item.source in identifiers and item.target in identifiers
         ]
         truncated |= len(connected) < len(edges) or len(connected) > request.max_edges
+        warnings = []
+        if truncated:
+            warnings.append(
+                "The graph is bounded: some evidence or links were omitted. Select fewer scenes or increase the graph limits."
+            )
+        if any(
+            support.kind in {"Observation", "Dialogue"}
+            and (support.start is None or support.end is None)
+            for edge in connected
+            for support in edge.supports
+        ):
+            warnings.append(
+                "Some evidence records have no exact interval; the parent scene interval is not substituted."
+            )
+        warnings.append(
+            "Camera IDs, recording sessions, ingestion times, reviewer history, and conflict records are not stored in this graph index."
+        )
         return GraphResponse(
             nodes=nodes,
             edges=connected[: request.max_edges],
             truncated=truncated,
             scene_ids=self.scene_ids,
-            warnings=[
-                "The graph is bounded: some evidence or links were omitted. Select fewer scenes or increase the graph limits."
-            ]
-            if truncated
-            else [],
+            warnings=warnings,
         )
 
 
@@ -347,7 +459,11 @@ class GraphExplorer:
                 for raw in row["nodes"]:
                     graph.node(raw, scene_id)
                 for raw in row["edges"]:
-                    graph.edge(raw, scene_id)
+                    scene_record = next(
+                        (item for item in row["nodes"] if _identity(item) == ("Scene", f"Scene:{scene_id}")),
+                        None,
+                    )
+                    graph.edge(raw, scene_id, support_raw=scene_record)
             evidence = []
             evidence_text = {}
             for query, kind, cap, parameter in (
@@ -369,7 +485,7 @@ class GraphExplorer:
                         continue
                     text = _evidence(row["node"]["properties"])
                     graph.node(row["node"], scene_id)
-                    graph.edge(row["edge"], scene_id, text)
+                    graph.edge(row["edge"], scene_id, text, row["node"])
                     evidence.append({"scene_id": scene_id, "item_id": row["item_id"], "kind": kind})
                     evidence_text[(scene_id, row["item_id"])] = text
             if evidence:
@@ -393,11 +509,21 @@ class GraphExplorer:
                         truncated = True
                         continue
                     graph.node(row["node"], key[0])
-                    graph.edge(row["edge"], key[0], evidence_text[key])
+                    graph.edge(
+                        row["edge"],
+                        key[0],
+                        evidence_text[key],
+                        row["edge"].get("source"),
+                    )
                     if len(row["direct_edges"]) > 2:
                         truncated = True
                     for raw in row["direct_edges"][:2]:
-                        graph.edge(raw, key[0], evidence_text[key])
+                        graph.edge(
+                            raw,
+                            key[0],
+                            evidence_text[key],
+                            row["edge"].get("source"),
+                        )
             return graph.response(request, truncated)
 
         try:

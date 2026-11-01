@@ -29,6 +29,7 @@ GraphEdgeType = Literal[
     "APPEARS_IN",
     "SPOKEN_BY",
 ]
+EvidenceRecordType = Literal["Scene", "Observation", "Dialogue"]
 
 
 class GraphRequest(Record):
@@ -62,10 +63,37 @@ class GraphNode(Record):
     scene_ids: list[str]
     properties: dict[str, str | int | float | bool | None]
     evidence: list[str] = Field(default_factory=list)
-    start: float | None = None
-    end: float | None = None
+    start: float | None = Field(default=None, ge=0)
+    end: float | None = Field(default=None, ge=0)
     confidence: float | None = Field(default=None, ge=0, le=1)
     verified: bool | None = None
+
+    @model_validator(mode="after")
+    def valid_interval(self):
+        if self.start is not None and self.end is not None and self.end < self.start:
+            raise ValueError("Evidence interval end precedes its start")
+        return self
+
+
+class GraphSupport(Record):
+    evidence_id: str
+    kind: EvidenceRecordType
+    scene_id: str
+    recording_id: str | None = None
+    source_reference: str | None = None
+    start: float | None = Field(default=None, ge=0)
+    end: float | None = Field(default=None, ge=0)
+    timestamp_basis: str | None = None
+    method: str | None = None
+    model: str | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    verified: bool | None = None
+
+    @model_validator(mode="after")
+    def valid_interval(self):
+        if self.start is not None and self.end is not None and self.end < self.start:
+            raise ValueError("Evidence interval end precedes its start")
+        return self
 
 
 class GraphEdge(Record):
@@ -75,6 +103,8 @@ class GraphEdge(Record):
     type: GraphEdgeType
     scene_ids: list[str]
     evidence: list[str] = Field(default_factory=list)
+    explanation: str = ""
+    supports: list[GraphSupport] = Field(default_factory=list)
     derived: Literal[False] = False
 
 

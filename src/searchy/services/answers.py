@@ -33,28 +33,29 @@ MAX_CONTEXT_CHARS = 42000
 _LINK_RELATIONS = {
     "clothing": "wears",
     "action": "performs",
-    "interaction": "interacts with",
-    "object": "with",
+    "object": "associated with",
     "location": "located in",
 }
+_GRAPH_SCHEMA = "searchy-evidence-v2"
 
 
 def _scene_relationships(graph: dict) -> list[dict]:
     grouped: dict[str, dict] = {}
-    for node in graph.get("nodes", []):
-        if node["type"] not in {"Character", "Clothing", "Action", "Object", "Location"}:
-            continue
-        for scene_id in node["scene_ids"]:
+    for link in _grounded_links(graph):
+        for scene_id in link["scene_ids"]:
             bucket = grouped.setdefault(
-                scene_id, {"scene_id": scene_id, "characters": [], "entities": {}}
+                scene_id,
+                {"scene_id": scene_id, "characters": [], "entities": {}, "links": []},
             )
-            if node["type"] == "Character":
-                if node["label"] not in bucket["characters"] and len(bucket["characters"]) < 8:
-                    bucket["characters"].append(node["label"])
-                continue
-            names = bucket["entities"].setdefault(node["type"], [])
-            if node["label"] not in names and len(names) < 6:
-                names.append(node["label"])
+            if link["source"] not in bucket["characters"]:
+                bucket["characters"].append(link["source"])
+            target_type = link["target_type"]
+            names = bucket["entities"].setdefault(target_type, [])
+            if link["target"] not in names:
+                names.append(link["target"])
+            bucket["links"].append(
+                {key: value for key, value in link.items() if key != "scene_ids"}
+            )
     return [grouped[key] for key in sorted(grouped)]
 
 
@@ -64,30 +65,55 @@ def _grounded_links(graph: dict) -> list[dict]:
     for observation in nodes.values():
         if observation["type"] != "Observation":
             continue
-        relation = _LINK_RELATIONS.get(observation.get("properties", {}).get("kind") or "")
-        if not relation:
+        kind = observation.get("properties", {}).get("kind") or ""
+        relation = _LINK_RELATIONS.get(kind)
+        if not relation and kind != "interaction":
             continue
         outgoing = [edge for edge in graph.get("edges", []) if edge["source"] == observation["id"]]
         subjects = [edge["target"] for edge in outgoing if edge["type"] == "SUBJECT"]
         described = [edge["target"] for edge in outgoing if edge["type"] == "DESCRIBES"]
         for subject in subjects:
             source = nodes.get(subject)
-            if source is None:
+            if source is None or source["type"] != "Character":
                 continue
             for target in described:
                 dest = nodes.get(target)
                 if dest is None:
                     continue
+                if kind == "interaction" and dest["type"] == "Character":
+                    relation = "interacts with"
+                elif kind == "interaction":
+                    continue
+                expected = {
+                    "clothing": "Clothing",
+                    "action": "Action",
+                    "location": "Location",
+                    "object": "Object",
+                }.get(kind)
+                if expected and dest["type"] != expected:
+                    continue
+                support_records = []
+                for edge in outgoing:
+                    if edge["type"] in {"SUBJECT", "DESCRIBES"}:
+                        support_records.extend(edge.get("supports", []))
+                supports = {
+                    (item.get("evidence_id"), item.get("scene_id")): item
+                    for item in support_records
+                }
+                if not supports:
+                    continue
                 links.append(
                     {
-                        "relation": "interacts with" if dest["type"] == "Character" else relation,
+                        "relation": relation,
                         "source": source["label"],
                         "target": dest["label"],
+                        "target_type": dest["type"],
                         "scene_ids": observation["scene_ids"],
                         "evidence": (observation.get("evidence") or [])[:1],
                         "start": observation.get("start"),
                         "end": observation.get("end"),
                         "verified": observation.get("verified"),
+                        "supports": list(supports.values())[:4],
                     }
                 )
                 if len(links) >= 24:
@@ -145,8 +171,8 @@ class AnswerService:
             "retrieval": {
                 "strategy": "hybrid_graph_context" if include_graph else "text_evidence",
                 "graph_used": False,
-                "prompt_version": "answers-2026-10-31",
-                "graph_schema": "searchy-evidence-v1",
+                "prompt_version": "answers-2026-11-01",
+                "graph_schema": _GRAPH_SCHEMA,
                 "embedding_model": self.settings.embedding_model_id,
                 "llm_provider": self.settings.llm_provider,
                 "llm_model": self.settings.llm_model_id,
@@ -320,13 +346,42 @@ class AnswerService:
                                 "end",
                                 "verified",
                                 "confidence",
+                                "method",
+                                "model",
+                                "source_reference",
+                                "timestamp_basis",
                             }
                         },
                     }
                     for n in selected["nodes"]
                 ],
                 "edges": [
-                    {k: e[k] for k in ("source", "target", "type", "scene_ids")}
+                    {
+                        **{k: e[k] for k in ("source", "target", "type", "scene_ids")},
+                        "explanation": e.get("explanation"),
+                        "derived": e.get("derived", False),
+                        "evidence": e.get("evidence", [])[:3],
+                        "supports": [
+                            {
+                                key: support.get(key)
+                                for key in (
+                                    "evidence_id",
+                                    "kind",
+                                    "scene_id",
+                                    "recording_id",
+                                    "source_reference",
+                                    "start",
+                                    "end",
+                                    "timestamp_basis",
+                                    "method",
+                                    "model",
+                                    "confidence",
+                                    "verified",
+                                )
+                            }
+                            for support in e.get("supports", [])[:8]
+                        ],
+                    }
                     for e in selected["edges"]
                 ],
             }
@@ -395,9 +450,12 @@ class AnswerService:
             )
             cached = saved.get("contexts", {}).get(str(include_graph))
             if cached and (
-                not include_graph
-                or cached["response"]["retrieval"].get("graph_used")
-                or not cached["scene_ids"]
+                cached["response"].get("retrieval", {}).get("graph_schema") == _GRAPH_SCHEMA
+                and (
+                    not include_graph
+                    or cached["response"]["retrieval"].get("graph_used")
+                    or not cached["scene_ids"]
+                )
             ):
                 return (
                     cached["response"],
@@ -443,7 +501,29 @@ class AnswerService:
                 self._session, sessions, search_id, query, scene_ids, collection_id, character_ids
             )
             if saved["answer"] and saved["answer"]["status"] == "generated":
-                yield "answer", saved["answer"]
+                cached_answer = saved["answer"]
+                if cached_answer.get("retrieval", {}).get("graph_schema") == _GRAPH_SCHEMA:
+                    yield "answer", cached_answer
+                    return
+                current, _, _ = await anyio.to_thread.run_sync(
+                    self.prepared,
+                    query,
+                    scene_ids,
+                    collection_id,
+                    character_ids,
+                    search_id,
+                    True,
+                )
+                refreshed = {
+                    **current,
+                    **cached_answer,
+                    "graph": current["graph"],
+                    "relationships": current["relationships"],
+                    "warnings": list(dict.fromkeys([*current["warnings"], *cached_answer.get("warnings", [])])),
+                    "retrieval": {**cached_answer.get("retrieval", {}), **current["retrieval"]},
+                }
+                await anyio.to_thread.run_sync(sessions.save_answer, search_id, refreshed)
+                yield "answer", refreshed
                 return
         plan = understand(query, self.search.requested_characters(query, collection_id))
         response, context, scenes = await anyio.to_thread.run_sync(

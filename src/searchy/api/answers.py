@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import Field, field_validator
 
-from searchy.api.exploration import GraphResponse
+from searchy.api.exploration import GraphResponse, GraphSupport
 from searchy.api.schemas import SearchRequest, SearchResponse
 from searchy.core.config import Settings
 from searchy.domain import Record
@@ -61,10 +61,23 @@ class AnswerEvidence(Record):
     end: float | None
 
 
+class AnswerRelationshipLink(Record):
+    source: str
+    relation: str
+    target: str
+    target_type: str
+    evidence: list[str] = Field(default_factory=list)
+    start: float | None = None
+    end: float | None = None
+    verified: bool | None = None
+    supports: list[GraphSupport] = Field(default_factory=list)
+
+
 class AnswerRelationship(Record):
     scene_id: str
     characters: list[str] = Field(default_factory=list)
     entities: dict[str, list[str]] = Field(default_factory=dict)
+    links: list[AnswerRelationshipLink] = Field(default_factory=list)
 
 
 class AnswerConstraint(Record):

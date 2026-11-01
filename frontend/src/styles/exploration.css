@@ -308,6 +308,24 @@
   font-size: 11px;
   font-variant-numeric: tabular-nums;
 }
+.graph-card-verification {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.2;
+}
+.graph-card-verification i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #bf7b3f;
+}
+.graph-card-verification.verified i {
+  background: #27866d;
+}
 .graph-node-play {
   display: grid;
   place-items: center;
@@ -737,6 +755,183 @@
   color: var(--text);
   width: 140px;
   font: inherit;
+}
+
+.graph-view-switch {
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  scrollbar-width: thin;
+}
+.graph-view-switch button {
+  flex: 0 0 auto;
+  min-height: 34px;
+}
+.graph-legend-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding-right: 12px;
+  border-right: 1px solid var(--line);
+}
+.graph-legend-layer {
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.graph-edge-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.graph-edge-legend i {
+  width: 15px;
+  border-top: 2px solid var(--graph-line);
+}
+.graph-edge-legend.inferred i {
+  border-top-style: dashed;
+  border-color: var(--accent);
+}
+.graph-schema-note {
+  margin: 8px 20px 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+.graph-timeline-note {
+  color: var(--muted);
+  font-size: 11px;
+}
+.graph-provenance-filters {
+  align-items: end !important;
+  padding-bottom: 6px !important;
+}
+.graph-provenance-filters label {
+  min-width: 150px;
+  align-items: flex-start !important;
+  flex-direction: column;
+  gap: 5px !important;
+  color: var(--muted);
+}
+.graph-provenance-filters select,
+.graph-provenance-filters input[type='number'] {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 5px 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.graph-filter-error {
+  color: #a43b3b;
+  font-size: 12px;
+  margin: 4px 0 12px;
+}
+.graph-support-list {
+  display: grid;
+  gap: 10px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+.graph-support-record {
+  padding: 11px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--surface-2);
+}
+.graph-support-open {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.graph-support-open > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--accent);
+}
+.graph-support-open small {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.graph-support-record dl,
+.graph-node-provenance dl {
+  display: grid;
+  gap: 7px;
+  margin: 11px 0 0 22px;
+  font-size: 10px;
+}
+.graph-support-record dl > div,
+.graph-node-provenance dl > div {
+  display: grid;
+  grid-template-columns: minmax(80px, 0.75fr) minmax(0, 1.25fr);
+  gap: 8px;
+}
+.graph-support-record dt,
+.graph-node-provenance dt {
+  color: var(--muted);
+}
+.graph-support-record dd,
+.graph-node-provenance dd {
+  margin: 0;
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+.graph-edge-supports h4,
+.graph-node-provenance h4 {
+  margin-top: 18px;
+}
+.graph-technical dl > div {
+  display: grid;
+  grid-template-columns: minmax(80px, 0.75fr) minmax(0, 1.25fr);
+  gap: 8px;
+}
+.graph-technical dd {
+  margin-top: 0;
+}
+.answer-relationship-list > li {
+  display: grid;
+  gap: 5px;
+  padding-block: 7px;
+}
+.answer-relationship-list small {
+  color: var(--muted);
+  line-height: 1.5;
+}
+.answer-relationship-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+@media (max-width: 640px) {
+  .graph-schema-note {
+    margin-inline: 16px;
+  }
+  .graph-provenance-filters label {
+    min-width: min(100%, 220px);
+    flex: 1 1 150px;
+  }
+  .graph-legend-group {
+    flex-basis: 100%;
+    border-right: 0;
+    padding: 3px 0;
+  }
+  .graph-edge-legend {
+    flex-basis: 100%;
+  }
 }
 .graph-legend-inferred::before {
   background: transparent;

@@ -110,6 +110,17 @@ export interface SearchAnswer {
     scene_id: string
     characters: string[]
     entities: Record<string, string[]>
+    links: {
+      source: string
+      relation: string
+      target: string
+      target_type: string
+      evidence: string[]
+      start: number | null
+      end: number | null
+      verified: boolean | null
+      supports: GraphSupport[]
+    }[]
   }[]
   constraints: { label: string; supported: boolean; detail: string }[]
   warnings: string[]
@@ -143,6 +154,21 @@ export interface EvidenceNode {
   verified: boolean | null
 }
 
+export interface GraphSupport {
+  evidence_id: string
+  kind: 'Scene' | 'Observation' | 'Dialogue'
+  scene_id: string
+  recording_id: string | null
+  source_reference: string | null
+  start: number | null
+  end: number | null
+  timestamp_basis: string | null
+  method: string | null
+  model: string | null
+  confidence: number | null
+  verified: boolean | null
+}
+
 export interface EvidenceEdge {
   id: string
   source: string
@@ -150,6 +176,8 @@ export interface EvidenceEdge {
   type: string
   scene_ids: string[]
   evidence: string[]
+  explanation?: string
+  supports?: GraphSupport[]
   derived: boolean
 }
 

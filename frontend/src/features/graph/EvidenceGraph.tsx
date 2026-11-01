@@ -40,6 +40,7 @@ import { sceneHref } from '../player/navigation'
 import { EvidenceInspector } from './EvidenceInspector'
 import {
   entityLabel,
+  filterEvidenceGraph,
   layoutGraph,
   mergeGraphs,
   hiddenForView,
@@ -90,14 +91,20 @@ const EvidenceCard = memo(function EvidenceCard({ data }: NodeProps<GraphNode>) 
         {entityLabel(record.type)}
       </span>
       <strong title={excerpt(title, 300)}>{excerpt(title, 72)}</strong>
-      {record.type === 'Scene' && (
+      {record.verified != null && (
+        <span className={`graph-card-verification ${record.verified ? 'verified' : 'unverified'}`}>
+          <i aria-hidden="true" />
+          {record.verified ? 'Source marked verified' : 'Unverified source'}
+        </span>
+      )}
+      {record.start != null && (
         <div className="graph-card-foot">
           <span>
             {timestamp(record.start)} – {timestamp(record.end)}
           </span>
           <button
             className="graph-node-play nodrag nopan"
-            aria-label={`Play scene at ${timestamp(record.start)}`}
+            aria-label={`Open evidence at ${timestamp(record.start)}`}
             onClick={(event) => {
               event.stopPropagation()
               data.open?.(record)
@@ -203,25 +210,86 @@ function GraphWorkspace({
       ),
     [base, extraSignature]
   )
+  const recordingOptions = useMemo(() => {
+    const videos = new Map<string, string>()
+    for (const node of graph.nodes) {
+      if (node.type === 'Video' && typeof node.properties.video_id === 'string') {
+        videos.set(
+          node.properties.video_id,
+          String(node.properties.title ?? node.properties.video_id)
+        )
+      }
+      if (node.type === 'Scene' && typeof node.properties.video_id === 'string') {
+        const id = node.properties.video_id
+        if (!videos.has(id)) videos.set(id, id)
+      }
+    }
+    return [...videos.entries()].sort((a, b) => a[1].localeCompare(b[1]))
+  }, [graph.nodes])
+  const sourceOptions = useMemo(() => {
+    const sources = new Map<string, string>()
+    for (const edge of graph.edges) {
+      for (const support of edge.supports ?? []) {
+        if (support.source_reference)
+          sources.set(`file:${support.source_reference}`, support.source_reference)
+        if (support.method) sources.set(`method:${support.method}`, `Method · ${support.method}`)
+      }
+    }
+    return [...sources.entries()].sort((a, b) => a[1].localeCompare(b[1]))
+  }, [graph.edges])
+  const filtered = useMemo(
+    () =>
+      filterEvidenceGraph(graph, {
+        source: preferences.sourceFilter,
+        recordingId: preferences.recordingFilter,
+        from: preferences.timeFrom,
+        to: preferences.timeTo,
+        verification: preferences.verificationFilter,
+      }),
+    [
+      graph,
+      preferences.sourceFilter,
+      preferences.recordingFilter,
+      preferences.timeFrom,
+      preferences.timeTo,
+      preferences.verificationFilter,
+    ]
+  )
   const researched = useMemo(
     () =>
-      researchGraph(graph, preferences.mode, {
+      researchGraph(filtered, preferences.mode, {
         characterId,
         focusSceneId,
         selectedId: preferences.selected,
+        recordingId: preferences.recordingFilter,
       }),
-    [graph, preferences.mode, preferences.selected, characterId, focusSceneId]
+    [
+      filtered,
+      preferences.mode,
+      preferences.selected,
+      preferences.recordingFilter,
+      characterId,
+      focusSceneId,
+    ]
   )
   const view = useMemo(
-    () => visibleGraph(researched, scope, preferences.hidden, preferences.hiddenEdges),
-    [researched, scope, preferences.hidden, preferences.hiddenEdges]
+    () =>
+      visibleGraph(
+        researched,
+        scope,
+        preferences.hidden,
+        preferences.hiddenEdges,
+        preferences.collapsedScenes
+      ),
+    [researched, scope, preferences.hidden, preferences.hiddenEdges, preferences.collapsedScenes]
   )
   const selected = [...graph.nodes, ...graph.edges].find((item) => item.id === preferences.selected)
+  const selectedScene =
+    selected && 'properties' in selected && selected.type === 'Scene' ? selected.scene_ids[0] : null
   useEffect(() => {
     const match = focusSceneId
-      ? (graph.nodes.find(
-          (node) => node.type === 'Scene' && node.scene_ids.includes(focusSceneId)
-        )?.id ?? `Scene:${focusSceneId}`)
+      ? (graph.nodes.find((node) => node.type === 'Scene' && node.scene_ids.includes(focusSceneId))
+          ?.id ?? `Scene:${focusSceneId}`)
       : null
     setPreferences((previous) =>
       previous.focusedScene === focusSceneId && (!match || previous.selected === match)
@@ -246,12 +314,14 @@ function GraphWorkspace({
   useEffect(() => {
     const saved = readGraphState(stateKey)
     setNodes(
-      layoutGraph(view.nodes, view.edges, orderedIds, saved.positions).map((node) => ({
-        ...node,
-        data: { ...node.data, open: (record: EvidenceNode) => openRef.current(record) },
-      }))
+      layoutGraph(view.nodes, view.edges, orderedIds, saved.positions, preferences.mode).map(
+        (node) => ({
+          ...node,
+          data: { ...node.data, open: (record: EvidenceNode) => openRef.current(record) },
+        })
+      )
     )
-  }, [view, orderedIds, setNodes, stateKey])
+  }, [view, orderedIds, setNodes, stateKey, preferences.mode])
   useEffect(() => saveGraphState(stateKey, preferences), [stateKey, preferences])
   const selectionSignature = selected?.scene_ids.join(',') ?? ''
   useEffect(() => {
@@ -320,6 +390,14 @@ function GraphWorkspace({
       ...current,
       mode,
       hidden: [...hiddenForView(mode)],
+      viewport: mode === current.mode ? current.viewport : undefined,
+    }))
+  const collapseScene = (sceneId: string) =>
+    setPreferences((current) => ({
+      ...current,
+      collapsedScenes: current.collapsedScenes.includes(sceneId)
+        ? current.collapsedScenes.filter((id) => id !== sceneId)
+        : [...current.collapsedScenes, sceneId].slice(-12),
     }))
   const exportEvidence = (format: 'json' | 'csv') => {
     const rows = view.edges.map((edge) => ({
@@ -331,6 +409,26 @@ function GraphWorkspace({
       target_id: edge.target,
       scene_ids: edge.scene_ids.join(' '),
       status: edge.derived ? 'inferred' : 'indexed',
+      recording_ids: [
+        ...new Set((edge.supports ?? []).map((support) => support.recording_id).filter(Boolean)),
+      ].join(' '),
+      evidence_ids: [...new Set((edge.supports ?? []).map((support) => support.evidence_id))].join(
+        ' '
+      ),
+      intervals: (edge.supports ?? [])
+        .map((support) =>
+          support.start != null && support.end != null ? `${support.start}-${support.end}` : ''
+        )
+        .filter(Boolean)
+        .join(' '),
+      sources: [
+        ...new Set(
+          (edge.supports ?? []).map((support) => support.source_reference).filter(Boolean)
+        ),
+      ].join(' '),
+      methods: [
+        ...new Set((edge.supports ?? []).map((support) => support.method).filter(Boolean)),
+      ].join(' '),
       evidence: edge.evidence.join(' | '),
     }))
     const content =
@@ -361,6 +459,12 @@ function GraphWorkspace({
       entityQuery: '',
       selected: null,
       expanded: [],
+      collapsedScenes: [],
+      sourceFilter: '',
+      recordingFilter: '',
+      timeFrom: null,
+      timeTo: null,
+      verificationFilter: 'all' as const,
       positions: {},
       viewport: undefined,
     }
@@ -368,7 +472,7 @@ function GraphWorkspace({
     saveGraphState(stateKey, initial)
     onFocus(null)
     setNodes(
-      layoutGraph(view.nodes, view.edges, orderedIds).map((n) => ({
+      layoutGraph(view.nodes, view.edges, orderedIds, {}, 'overview').map((n) => ({
         ...n,
         data: { ...n.data, open: openScene },
       }))
@@ -411,10 +515,13 @@ function GraphWorkspace({
         {(
           [
             ['overview', 'Overview'],
-            ['detail', 'Detailed evidence'],
+            ['evidence', 'Evidence'],
+            ['timeline', 'Timeline'],
+            ['recording', 'Recording'],
+            ['activity', 'Activity'],
             ['character', 'Character'],
             ['scene', 'Scene'],
-            ['path', 'Relationship'],
+            ['relationship', 'Relationship'],
           ] as const
         ).map(([mode, label]) => (
           <button
@@ -445,6 +552,11 @@ function GraphWorkspace({
           <span>
             {view.nodes.length} nodes · {view.edges.length} connections
           </span>
+          {preferences.mode === 'timeline' && (
+            <span className="graph-timeline-note">
+              Chronological order · spacing is not duration scale
+            </span>
+          )}
           {busy && <span className="small muted">Loading evidence…</span>}
           {focusSceneId && (
             <button className="text-link" onClick={() => onFocus(null)}>
@@ -471,6 +583,17 @@ function GraphWorkspace({
             <SlidersHorizontal size={14} />
             Filters
           </button>
+          {selectedScene && (
+            <button
+              className={`graph-tool ${preferences.collapsedScenes.includes(selectedScene) ? 'active' : ''}`}
+              aria-pressed={preferences.collapsedScenes.includes(selectedScene)}
+              onClick={() => collapseScene(selectedScene)}
+            >
+              {preferences.collapsedScenes.includes(selectedScene)
+                ? 'Expand scene'
+                : 'Collapse scene'}
+            </button>
+          )}
           <button
             className={`graph-tool ${preferences.labels ? 'active' : ''}`}
             aria-pressed={preferences.labels}
@@ -487,20 +610,155 @@ function GraphWorkspace({
           </button>
         </div>
       </div>
-      <div className="graph-legend" aria-label="Entity types in this graph">
-        {Object.entries(typeLabels)
-          .filter(([type]) => view.nodes.some((node) => node.type === type))
-          .map(([type, label]) => (
-            <span key={type} className={`graph-legend-item graph-legend-${type.toLowerCase()}`}>
-              {label}
-            </span>
-          ))}
+      <div className="graph-legend" aria-label="Evidence graph legend">
+        {[
+          ['Sources', ['Video', 'Episode']],
+          ['Scenes', ['Scene']],
+          ['Evidence records', ['Observation', 'Dialogue']],
+          ['Entities', ['Character', 'Action', 'Clothing', 'Object', 'Location']],
+        ].map(([group, types]) => {
+          const shown = (types as string[]).filter((type) =>
+            view.nodes.some((node) => node.type === type)
+          )
+          if (!shown.length) return null
+          return (
+            <div className="graph-legend-group" key={String(group)}>
+              <span className="graph-legend-layer">{group}</span>
+              {shown.map((type) => (
+                <span key={type} className={`graph-legend-item graph-legend-${type.toLowerCase()}`}>
+                  {typeLabels[type]}
+                </span>
+              ))}
+            </div>
+          )
+        })}
+        <span className="graph-edge-legend">
+          <i /> Stored relationship
+        </span>
         {view.edges.some((edge) => edge.derived) && (
-          <span className="graph-legend-item graph-legend-inferred">Inferred summary</span>
+          <span className="graph-edge-legend inferred">
+            <i /> Summary with supporting evidence
+          </span>
         )}
       </div>
+      <p className="graph-schema-note">
+        This index has no camera/session, reviewer, or conflict records. Missing source times remain
+        unset.
+      </p>
       {filtersOpen && (
         <div className="graph-filter-panel">
+          <fieldset className="graph-provenance-filters">
+            <legend>Evidence scope</legend>
+            <label>
+              Source
+              <select
+                value={preferences.sourceFilter}
+                onChange={(event) =>
+                  setPreferences((current) => ({ ...current, sourceFilter: event.target.value }))
+                }
+              >
+                <option value="">All indexed sources</option>
+                {sourceOptions.map(([value, label]) => (
+                  <option value={value} key={value}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Recording
+              <select
+                value={preferences.recordingFilter}
+                onChange={(event) =>
+                  setPreferences((current) => ({
+                    ...current,
+                    recordingFilter: event.target.value,
+                    mode: event.target.value ? 'recording' : current.mode,
+                  }))
+                }
+              >
+                <option value="">All recordings</option>
+                {recordingOptions.map(([id, title]) => (
+                  <option value={id} key={id}>
+                    {title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              From (seconds)
+              <input
+                aria-label="Start of evidence time range in seconds"
+                type="number"
+                min="0"
+                step="0.1"
+                value={preferences.timeFrom ?? ''}
+                onChange={(event) =>
+                  setPreferences((current) => ({
+                    ...current,
+                    timeFrom: event.target.value === '' ? null : Number(event.target.value),
+                  }))
+                }
+              />
+            </label>
+            <label>
+              To (seconds)
+              <input
+                aria-label="End of evidence time range in seconds"
+                type="number"
+                min="0"
+                step="0.1"
+                value={preferences.timeTo ?? ''}
+                onChange={(event) =>
+                  setPreferences((current) => ({
+                    ...current,
+                    timeTo: event.target.value === '' ? null : Number(event.target.value),
+                  }))
+                }
+              />
+            </label>
+            <label>
+              Verification
+              <select
+                value={preferences.verificationFilter}
+                onChange={(event) =>
+                  setPreferences((current) => ({
+                    ...current,
+                    verificationFilter: event.target
+                      .value as GraphPreferences['verificationFilter'],
+                  }))
+                }
+              >
+                <option value="all">All evidence states</option>
+                <option value="verified">Source marked verified</option>
+                <option value="unverified">Marked unverified</option>
+                <option value="unreviewed">No verification flag</option>
+                <option value="inferred">Inferred summaries</option>
+              </select>
+            </label>
+            <button
+              className="text-link"
+              onClick={() =>
+                setPreferences((current) => ({
+                  ...current,
+                  sourceFilter: '',
+                  recordingFilter: '',
+                  timeFrom: null,
+                  timeTo: null,
+                  verificationFilter: 'all',
+                }))
+              }
+            >
+              Clear evidence filters
+            </button>
+          </fieldset>
+          {preferences.timeFrom != null &&
+            preferences.timeTo != null &&
+            preferences.timeFrom > preferences.timeTo && (
+              <p className="graph-filter-error" role="alert">
+                The start time must be before the end time.
+              </p>
+            )}
           <fieldset>
             <legend>Show entities</legend>
             {Object.entries(typeLabels)
@@ -558,7 +816,7 @@ function GraphWorkspace({
             onNodesChange={onNodesChange}
             onNodeClick={(_, node) => setPreferences((p) => ({ ...p, selected: node.id }))}
             onNodeDoubleClick={(_, node) =>
-              node.data.record.type === 'Scene' && openScene(node.data.record)
+              node.data.record.start != null && openScene(node.data.record)
             }
             onEdgeClick={(_, edge) => setPreferences((p) => ({ ...p, selected: edge.id }))}
             onPaneClick={() => setPreferences((p) => ({ ...p, selected: null }))}
@@ -605,13 +863,19 @@ function GraphWorkspace({
           </ReactFlow>
           {!view.nodes.length && (
             <div className="graph-no-nodes">
-              {preferences.mode === 'path'
-                ? 'Select an entity to inspect the evidence that connects it.'
-                : preferences.mode === 'scene'
-                  ? 'Select a scene to see the people, objects, and observations recorded in it.'
-                  : preferences.mode === 'character'
-                    ? 'No indexed person matches this character filter.'
-                    : 'No entities match these filters. Reset the view to show the scene evidence.'}
+              {preferences.mode === 'path' || preferences.mode === 'relationship'
+                ? 'Select a node or connection to inspect its supporting evidence.'
+                : preferences.mode === 'timeline'
+                  ? 'No scene, observation, or dialogue records have exact intervals for this view.'
+                  : preferences.mode === 'activity'
+                    ? 'No indexed activity observations are available for these scenes.'
+                    : preferences.mode === 'recording'
+                      ? 'No indexed scenes are available for this recording selection.'
+                      : preferences.mode === 'scene'
+                        ? 'Select a scene to see the people, objects, and observations recorded in it.'
+                        : preferences.mode === 'character'
+                          ? 'No indexed person matches this character filter.'
+                          : 'No entities match these filters. Reset the view to show the scene evidence.'}
             </div>
           )}
         </div>

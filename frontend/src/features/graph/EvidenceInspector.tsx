@@ -4,7 +4,7 @@ import { episodeTitle, excerpt, timestamp } from '../../lib/format'
 import { thumbnailUrl } from '../../services/api'
 import { sceneHref } from '../player/navigation'
 import { evidenceClass, relationshipLabel, entityLabel } from './model'
-import type { EvidenceEdge, EvidenceNode, SceneMatch } from '../../types'
+import type { EvidenceEdge, EvidenceNode, GraphSupport, SceneMatch } from '../../types'
 
 const explanations: Record<string, string> = {
   Character: 'A person linked to these scenes by appearance, speech, or an observation.',
@@ -17,6 +17,110 @@ const explanations: Record<string, string> = {
   Observation: 'A recorded visual or scene observation.',
 }
 const nodeExplanation = (type: string) => explanations[type] ?? ''
+
+const verificationLabel = (verified: boolean | null) =>
+  verified === true
+    ? 'Source marked verified'
+    : verified === false
+      ? 'Marked unverified'
+      : 'No verification flag'
+
+function SupportRecord({
+  support,
+  nodes,
+  scenes,
+  origin,
+  onOpen,
+}: {
+  support: GraphSupport
+  nodes: EvidenceNode[]
+  scenes: SceneMatch[]
+  origin: string
+  onOpen: () => void
+}) {
+  const scene = nodes.find(
+    (item) => item.type === 'Scene' && item.scene_ids.includes(support.scene_id)
+  )
+  const match = scenes.find((item) => item.scene_id === support.scene_id)
+  const recording = nodes.find(
+    (item) => item.type === 'Video' && item.properties.video_id === support.recording_id
+  )
+  const sourceLabel = match
+    ? episodeTitle(match.episode_id)
+    : String(scene?.properties.episode_id ?? support.recording_id ?? 'Indexed recording')
+  const interval =
+    support.start != null && support.end != null
+      ? `${timestamp(support.start)} – ${timestamp(support.end)}`
+      : 'No exact interval stored'
+  return (
+    <li className="graph-support-record">
+      <Link
+        className="graph-support-open"
+        to={sceneHref(support.scene_id, support.start, origin)}
+        onClick={onOpen}
+      >
+        <Play size={13} />
+        <span>
+          {sourceLabel}
+          <small>
+            {interval} ·{' '}
+            {match
+              ? match.playback.available
+                ? 'Video available'
+                : 'Metadata only'
+              : 'Open scene record'}
+          </small>
+        </span>
+      </Link>
+      <dl>
+        <div>
+          <dt>Evidence record</dt>
+          <dd>{support.evidence_id}</dd>
+        </div>
+        {support.recording_id && (
+          <div>
+            <dt>Recording ID</dt>
+            <dd>{recording?.label ?? support.recording_id}</dd>
+          </div>
+        )}
+        {support.source_reference && (
+          <div>
+            <dt>Source reference</dt>
+            <dd>{support.source_reference}</dd>
+          </div>
+        )}
+        {support.timestamp_basis && (
+          <div>
+            <dt>Timestamp basis</dt>
+            <dd>{support.timestamp_basis}</dd>
+          </div>
+        )}
+        {support.method && (
+          <div>
+            <dt>Method</dt>
+            <dd>{support.method}</dd>
+          </div>
+        )}
+        {support.model && (
+          <div>
+            <dt>Model</dt>
+            <dd>{support.model}</dd>
+          </div>
+        )}
+        {support.confidence != null && (
+          <div>
+            <dt>Source confidence</dt>
+            <dd>{support.confidence.toFixed(2)}</dd>
+          </div>
+        )}
+        <div>
+          <dt>Verification</dt>
+          <dd>{verificationLabel(support.verified)}</dd>
+        </div>
+      </dl>
+    </li>
+  )
+}
 
 export function EvidenceInspector({
   selected,
@@ -93,15 +197,33 @@ export function EvidenceInspector({
       <p className="graph-source-label">
         {inContext ? 'Selected answer context' : 'Additional indexed evidence'}
       </p>
-      {preview && (
-        <img className="graph-thumb" src={thumbnailUrl(preview)} alt="" />
-      )}
+      {preview && <img className="graph-thumb" src={thumbnailUrl(preview)} alt="" />}
       {edge && (
-        <div className="graph-connection">
-          <span>{excerpt(nodes.find((n) => n.id === edge.source)?.label ?? 'Source', 80)}</span>
-          <span>{relationshipLabel(edge.type)}</span>
-          <span>{excerpt(nodes.find((n) => n.id === edge.target)?.label ?? 'Target', 80)}</span>
-        </div>
+        <>
+          <div className="graph-connection">
+            <span>{excerpt(nodes.find((n) => n.id === edge.source)?.label ?? 'Source', 80)}</span>
+            <span>{relationshipLabel(edge.type)}</span>
+            <span>{excerpt(nodes.find((n) => n.id === edge.target)?.label ?? 'Target', 80)}</span>
+          </div>
+          {edge.explanation && <p className="graph-description">{edge.explanation}</p>}
+        </>
+      )}
+      {edge && !!edge.supports?.length && (
+        <section className="graph-edge-supports">
+          <h4>Supporting source records · {edge.supports.length}</h4>
+          <ul className="graph-support-list">
+            {edge.supports.slice(0, 8).map((support) => (
+              <SupportRecord
+                key={`${support.evidence_id}:${support.scene_id}:${support.start ?? ''}`}
+                support={support}
+                nodes={nodes}
+                scenes={scenes}
+                origin={origin}
+                onOpen={onOpen}
+              />
+            ))}
+          </ul>
+        </section>
       )}
       {!!linked.length && (
         <section>
@@ -130,6 +252,41 @@ export function EvidenceInspector({
           {evidence.map((text) => (
             <blockquote key={text}>{excerpt(text, 360)}</blockquote>
           ))}
+        </section>
+      )}
+      {node && (properties?.source_reference || properties?.method || properties?.model) && (
+        <section className="graph-node-provenance">
+          <h4>Data provenance</h4>
+          <dl>
+            {typeof properties.source_reference === 'string' && (
+              <div>
+                <dt>Source reference</dt>
+                <dd>{properties.source_reference}</dd>
+              </div>
+            )}
+            {typeof properties.method === 'string' && (
+              <div>
+                <dt>Method</dt>
+                <dd>{properties.method}</dd>
+              </div>
+            )}
+            {typeof properties.model === 'string' && (
+              <div>
+                <dt>Model</dt>
+                <dd>{properties.model}</dd>
+              </div>
+            )}
+            {typeof properties.timestamp_basis === 'string' && (
+              <div>
+                <dt>Timestamp basis</dt>
+                <dd>{properties.timestamp_basis}</dd>
+              </div>
+            )}
+            <div>
+              <dt>Verification</dt>
+              <dd>{verificationLabel(node.verified)}</dd>
+            </div>
+          </dl>
         </section>
       )}
       <section className="graph-related-scenes">
@@ -185,7 +342,18 @@ export function EvidenceInspector({
             Object.entries(properties)
               .filter(
                 ([key, value]) =>
-                  value != null && !['description', 'text', 'value', 'evidence'].includes(key)
+                  value != null &&
+                  ![
+                    'description',
+                    'text',
+                    'value',
+                    'evidence',
+                    'source_reference',
+                    'method',
+                    'model',
+                    'timestamp_basis',
+                    'verified',
+                  ].includes(key)
               )
               .map(([key, value]) => (
                 <div key={key}>

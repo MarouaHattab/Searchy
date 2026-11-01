@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Check, Copy, LoaderCircle, ScanSearch, Square } from 'lucide-react'
 import { Link } from 'react-router'
-import { excerpt } from '../../lib/format'
+import { excerpt, timestamp } from '../../lib/format'
 import { sceneHref } from '../player/navigation'
 import type { useAnswer } from './useAnswer'
 
@@ -142,17 +142,44 @@ export function AnswerPanel({
       {!!answer?.relationships.length && (
         <details className="answer-evidence">
           <summary>Graph relationships</summary>
-          <ul className="answer-notes">
-            {answer.relationships.slice(0, 8).map((item) => (
-              <li key={item.scene_id}>
-                <button type="button" className="text-link" onClick={() => onCite?.(item.scene_id)}>
-                  {item.characters.join(', ') || 'Scene evidence'}
-                </button>
-                {Object.entries(item.entities)
-                  .filter(([, values]) => values.length)
-                  .map(([kind, values]) => ` · ${kind}: ${values.slice(0, 3).join(', ')}`)}
-              </li>
-            ))}
+          <ul className="answer-notes answer-relationship-list">
+            {answer.relationships.flatMap((item) =>
+              item.links.map((link, index) => (
+                <li key={`${item.scene_id}:${link.source}:${link.target}:${index}`}>
+                  <span>
+                    <strong>{link.source}</strong> {link.relation} <strong>{link.target}</strong>
+                  </span>
+                  {link.evidence[0] && <small>{excerpt(link.evidence[0], 220)}</small>}
+                  <small>
+                    {link.start != null && link.end != null
+                      ? `${timestamp(link.start)} – ${timestamp(link.end)}`
+                      : 'No exact interval recorded'}
+                    {' · '}
+                    {link.verified === true
+                      ? 'Source marked verified'
+                      : link.verified === false
+                        ? 'Unverified source record'
+                        : 'Verification not recorded'}
+                  </small>
+                  <span className="answer-relationship-actions">
+                    <button
+                      type="button"
+                      className="text-link"
+                      onClick={() => onCite?.(item.scene_id)}
+                    >
+                      Show in graph
+                    </button>
+                    <Link
+                      className="text-link"
+                      to={sceneHref(item.scene_id, link.start, origin)}
+                      onClick={onOpen}
+                    >
+                      {link.start == null ? 'Open scene' : `Play at ${timestamp(link.start)}`}
+                    </Link>
+                  </span>
+                </li>
+              ))
+            )}
           </ul>
         </details>
       )}
