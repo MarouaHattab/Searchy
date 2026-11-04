@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
-from searchy.core.errors import InvalidInput, SearchyError
+from searchy.core import InvalidInput, SearchyError
 
 
 class CharacterStore:

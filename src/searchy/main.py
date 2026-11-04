@@ -13,25 +13,25 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
-from searchy.api.answers import SearchSessionResponse, create_answers_router
-from searchy.api.catalog import create_catalog_router
-from searchy.api.characters import create_character_router
-from searchy.api.chat import create_chat_router
-from searchy.api.exploration import create_exploration_router
-from searchy.api.schemas import (
+from searchy.api import (
     ImportRequest,
     JobResponse,
     SceneDetail,
     SearchRequest,
     SearchResponse,
+    create_answers_router,
+    create_catalog_router,
+    create_character_router,
+    create_chat_router,
+    create_exploration_router,
     public_job,
 )
-from searchy.core.config import Settings
-from searchy.core.errors import InvalidInput, SearchyError
-from searchy.ingestion.importer import inspect_chunks
-from searchy.processing.video import VideoProcessor
-from searchy.retrieval.search import scene_view
-from searchy.services.container import Services
+from searchy.api.answers import SearchSessionResponse
+from searchy.core import InvalidInput, SearchyError, Settings
+from searchy.ingestion import inspect_chunks
+from searchy.processing import VideoProcessor
+from searchy.retrieval import scene_view
+from searchy.services import Services
 from searchy.worker import Worker
 
 logger = logging.getLogger("searchy")
@@ -301,7 +301,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             raise InvalidInput(
                 "Enable VISUAL_ENABLED and index scenes with frames to use visual search"
             )
-        from searchy.retrieval.understanding import understand
+        from searchy.retrieval import understand
 
         request = body.model_dump(exclude_none=True)
         result = svc.search.search(**request)

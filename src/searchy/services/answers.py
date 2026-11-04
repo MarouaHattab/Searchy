@@ -8,10 +8,9 @@ import anyio
 import httpx
 
 from searchy.api.exploration import GraphRequest
-from searchy.core.config import Settings
-from searchy.core.errors import InvalidInput, SearchyError
+from searchy.core import InvalidInput, SearchyError, Settings
 from searchy.domain import stable_id
-from searchy.graph.explorer import GraphExplorer
+from searchy.models import ClaimVerifier
 from searchy.models.answers import AnswerProvider, build_prompt
 from searchy.retrieval.search import (
     character_matches,
@@ -22,9 +21,8 @@ from searchy.retrieval.search import (
     simultaneous_timing,
     speaker_matches,
 )
-from searchy.retrieval.understanding import clothing_query, understand
-from searchy.storage.metadata import MetadataStore
-from searchy.storage.sessions import SearchSessions
+from searchy.retrieval.understanding import clothing_query, profession_evidence, understand
+from searchy.storage import MetadataStore, SearchSessions
 
 MAX_DESCRIPTION = 900
 MAX_EVIDENCE_PER_SCENE = 8
@@ -35,6 +33,7 @@ _LINK_RELATIONS = {
     "action": "performs",
     "object": "associated with",
     "location": "located in",
+    "profession": "works as",
 }
 _GRAPH_SCHEMA = "searchy-evidence-v2"
 
@@ -89,6 +88,7 @@ def _grounded_links(graph: dict) -> list[dict]:
                     "action": "Action",
                     "location": "Location",
                     "object": "Object",
+                    "profession": "Profession",
                 }.get(kind)
                 if expected and dest["type"] != expected:
                     continue
@@ -132,6 +132,7 @@ class AnswerService:
     ):
         self.settings, self.metadata, self.search, self.graph = settings, metadata, search, graph
         self.provider = AnswerProvider(settings, transport)
+        self.verifier = ClaimVerifier(settings)
 
     def answer(
         self, query, scene_ids, collection_id=None, character_ids=None, search_id=None
@@ -258,6 +259,8 @@ class AnswerService:
                 identifiers.append(stable_id(f"{parts[1]}:{parts[0]}:{parts[2]}"))
         if self.graph is not None and include_graph:
             try:
+                from searchy.graph import GraphExplorer
+
                 response["graph"] = (
                     GraphExplorer(self.graph, self.metadata)
                     .explore(
@@ -444,13 +447,36 @@ class AnswerService:
         evidence.sort(
             key=lambda e: (len(terms & normalized_terms(e["text"])), e["verified"]), reverse=True
         )
-        plan = understand(query, [])
+        requested = self.search.requested_characters(query, scene.collection_id)
+        plan = understand(query, requested)
+        dialogue = [e for e in evidence if e["kind"] == "dialogue"]
+        if requested and plan.profession_intent:
+            dialogue = [
+                item
+                for item in dialogue
+                if any(
+                    character_matches(reference["name"], name)
+                    for reference in item["subject_characters"]
+                    for name in requested
+                )
+            ]
+        elif requested and plan.dialogue_intent and not plan.mention_intent:
+            dialogue = [
+                item
+                for item in dialogue
+                if any(
+                    character_matches(item["speaker_name"], name) for name in requested
+                )
+            ]
+        elif plan.mention_intent:
+            dialogue = [item for item in dialogue if item["mentioned_characters"]]
+        elif plan.visual_intent:
+            dialogue = []
         if plan.narrative or plan.temporal or plan.dialogue_intent:
             descriptions = [e for e in evidence if e["kind"] == "description"][:1]
-            dialogue = [e for e in evidence if e["kind"] == "dialogue"][:3]
             other = [e for e in evidence if e["kind"] not in {"description", "dialogue"}]
             return (descriptions + dialogue + other)[:5]
-        return evidence[:5]
+        return ([e for e in evidence if e["kind"] != "dialogue"] + dialogue)[:5]
 
     def _session(self, sessions, search_id, query, scene_ids, collection_id, character_ids):
         saved = sessions.get(search_id)
@@ -600,6 +626,18 @@ class AnswerService:
                     claim = claim.model_copy(
                         update={"text": "According to the indexed evidence, " + claim.text}
                     )
+                # Phase 5: Shared ClaimVerifier attribution check
+                verifier_check = self.verifier.verify_claim(
+                    claim.text,
+                    [1],
+                    [{"number": 1, "snippet": " ".join(e.get("text", "") for e in selected)}]
+                )
+                if not verifier_check.is_verified:
+                    response["warnings"].append(
+                        f"An AI statement failed grounding check: {verifier_check.rejection_reason}"
+                    )
+                    continue
+
                 yield "status", {"state": "verifying"}
                 if not await self.provider.verify(
                     claim, selected, self._claim_graph(claim, context["graph"])
@@ -717,21 +755,62 @@ class AnswerService:
         requested: list[str],
         character_ids: list[str] | None = None,
     ) -> list[str] | None:
-        if character_ids and not set(character_ids) <= set(scene.character_ids):
+        if character_ids and not set(character_ids) <= set(scene.related_character_ids):
             return None
         if not all(
-            any(character_matches(actual, name) for actual in scene.characters)
+            any(character_matches(actual, name) for actual in scene.related_characters)
             for name in requested
         ):
             return None
         plan = understand(query, requested)
+        if plan.visual_intent and requested and not all(
+            any(character_matches(actual, name) for actual in scene.visual_characters)
+            for name in requested
+        ):
+            return None
+        if plan.profession_intent and requested:
+            for name in requested:
+                directly_about = any(
+                    reference.relation == "subject"
+                    and character_matches(reference.name, name)
+                    and profession_evidence(line.text)
+                    for line in scene.dialogue
+                    for reference in line.references
+                ) or any(
+                    observation.kind.value == "profession"
+                    and observation.subject
+                    and character_matches(observation.subject, name)
+                    for observation in scene.observations
+                )
+                if not directly_about:
+                    return None
+        if plan.mention_intent and requested:
+            if not all(
+                any(
+                    reference.relation == "mentioned"
+                    and character_matches(reference.name, name)
+                    for line in scene.dialogue
+                    for reference in line.references
+                )
+                for name in requested
+            ):
+                return None
+        if plan.mention_intent and not scene.mentioned_characters:
+            return None
         if not clothing_matches(clothing_query(query), scene, requested, character_ids):
             return None
         content = plan.content_tokens
         target = content - {"dialogue", "quote"}
-        if plan.dialogue_intent and not dialogue_matches(
-            " ".join(line.text for line in scene.dialogue), list(plan.quoted), target
+        if (
+            plan.dialogue_intent
+            and not plan.mention_intent
+            and not plan.speaker_identity_intent
+            and not dialogue_matches(
+                " ".join(line.text for line in scene.dialogue), list(plan.quoted), target
+            )
         ):
+            return None
+        if plan.speaker_identity_intent and not scene.dialogue:
             return None
         observed = normalized_terms(scene.search_text())
         missing = sorted(term for term in content if not normalized_terms(term) <= observed)
@@ -752,14 +831,11 @@ class AnswerService:
             )
         ):
             missing.append("character action association")
-        if (
-            plan.dialogue_intent
-            and requested
-            and not all(
+        if plan.dialogue_intent and requested and not plan.mention_intent:
+            if not all(
                 speaker_matches(scene, name, list(plan.quoted), target) for name in requested
-            )
-        ):
-            missing.append("character dialogue association")
+            ):
+                return None
         if (
             character_ids
             and action_terms
@@ -776,15 +852,12 @@ class AnswerService:
             )
         ):
             missing.append("character action association")
-        if (
-            character_ids
-            and plan.dialogue_intent
-            and not all(
+        if character_ids and plan.dialogue_intent and not plan.mention_intent:
+            if not all(
                 speaker_matches(scene, "", list(plan.quoted), target, identifier)
                 for identifier in character_ids
-            )
-        ):
-            missing.append("character dialogue association")
+            ):
+                return None
         timing = simultaneous_timing(query, scene, requested, character_ids, action_terms)
         if timing == "disjoint":
             return None
@@ -796,7 +869,8 @@ class AnswerService:
     def _evidence(scene, character_ids: list[str] | None = None, query: str = "") -> list[dict]:
         items = []
         selected = set(character_ids or [])
-        if scene.description.strip():
+        visual_description = scene.visual_text
+        if visual_description.strip():
             items.append(
                 {
                     "evidence_id": f"{scene.scene_id}:description",
@@ -805,11 +879,29 @@ class AnswerService:
                     "text": (
                         "Scene context; character ownership is unassigned: " if selected else ""
                     )
-                    + clean_caption(scene.description)[:MAX_DESCRIPTION],
+                    + clean_caption(visual_description)[:MAX_DESCRIPTION],
                     "verified": False,
                     "confidence": None,
                     "start": scene.start,
                     "end": scene.end,
+                    "episode_id": scene.episode_id,
+                    "visual_characters": scene.visual_characters,
+                    "evidence_source": "visual_caption",
+                }
+            )
+        if scene.scene_summary.strip():
+            items.append(
+                {
+                    "evidence_id": f"{scene.scene_id}:summary",
+                    "scene_id": scene.scene_id,
+                    "kind": "scene_summary",
+                    "text": clean_caption(scene.scene_summary)[:MAX_DESCRIPTION],
+                    "verified": False,
+                    "confidence": None,
+                    "start": scene.start,
+                    "end": scene.end,
+                    "episode_id": scene.episode_id,
+                    "evidence_source": "scene_summary",
                 }
             )
         observations = [
@@ -870,7 +962,12 @@ class AnswerService:
         dialogue = [
             (index, line, identity_key(scene, line.speaker, line.speaker_id))
             for index, line in enumerate(scene.dialogue)
-            if not selected or not line.speaker_id or line.speaker_id in selected
+            if not selected
+            or (line.speaker_id and line.speaker_id in selected)
+            or any(
+                identity_key(scene, reference.name, reference.character_id) in selected
+                for reference in line.references
+            )
         ]
         dialogue.sort(
             key=lambda item: (
@@ -892,9 +989,28 @@ class AnswerService:
                     "kind": "dialogue",
                     "text": f"{identity}{speaker}{line.text}"[:400],
                     "verified": bool(line.provenance and line.provenance.verified),
-                    "confidence": line.provenance.confidence if line.provenance else None,
+                    "confidence": line.speaker_confidence,
                     "start": line.start,
                     "end": line.end,
+                    "source_start": line.source_start,
+                    "source_end": line.source_end,
+                    "episode_id": scene.episode_id,
+                    "speaker_id": line.speaker_id,
+                    "speaker_name": line.speaker or "UNKNOWN",
+                    "speaker_confidence": line.speaker_confidence,
+                    "mentioned_characters": [
+                        reference.model_dump()
+                        for reference in line.references
+                        if reference.relation == "mentioned"
+                    ],
+                    "subject_characters": [
+                        reference.model_dump()
+                        for reference in line.references
+                        if reference.relation == "subject"
+                    ],
+                    "evidence_source": (
+                        line.provenance.source if line.provenance else "transcript"
+                    ),
                 }
             )
         return items

@@ -1,20 +1,19 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, Response
 
-from searchy.api.schemas import (
+from searchy.core import Settings
+from searchy.retrieval import scene_view
+from .schemas import (
     CharacterSummary,
     LibraryResponse,
     LibraryVideo,
     SceneDetail,
     WorkspaceResponse,
 )
-from searchy.core.config import Settings
-from searchy.retrieval.search import scene_view
-from searchy.services.catalog import CatalogService
-from searchy.services.media import MediaService
 
 
 def create_catalog_router(settings: Settings, services, authorize) -> APIRouter:
+    from searchy.services import CatalogService, MediaService
     router = APIRouter(prefix="/api", dependencies=[Depends(authorize)])
     media = MediaService(settings)
 

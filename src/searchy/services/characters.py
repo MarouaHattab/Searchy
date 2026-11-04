@@ -9,11 +9,9 @@ from pathlib import Path
 from uuid import uuid4
 
 from searchy.api.schemas import public_job
-from searchy.core.config import Settings
-from searchy.core.errors import InvalidInput, SearchyError
-from searchy.models.faces import OpenCVFaces
-from searchy.storage.characters import CharacterStore
-from searchy.storage.metadata import MetadataStore
+from searchy.core import InvalidInput, SearchyError, Settings
+from searchy.models import OpenCVFaces
+from searchy.storage import CharacterStore, MetadataStore
 
 _UNSET = object()
 
@@ -41,7 +39,7 @@ class CharacterService:
         scenes = [
             scene
             for scene, indexed in records
-            if indexed and character["id"] in scene.character_ids
+            if indexed and character["id"] in scene.visual_character_ids
         ]
         verified = sum(
             any(

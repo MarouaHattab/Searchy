@@ -2,7 +2,7 @@ import json
 import time
 from uuid import uuid4
 
-from searchy.core.errors import SearchyError
+from searchy.core import SearchyError
 
 MAX_MESSAGES = 400
 MAX_AGE_SECONDS = 7 * 86400

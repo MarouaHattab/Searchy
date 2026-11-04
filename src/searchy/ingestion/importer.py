@@ -10,9 +10,10 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from searchy.core.errors import InvalidInput
+from searchy.core import InvalidInput
 from searchy.domain import (
     Dialogue,
+    DialogueReference,
     Media,
     Observation,
     ObservationKind,
@@ -166,7 +167,133 @@ def _caption(episode: Path, name: str, aggregate: dict, warnings: list[str]) -> 
     return "", file_source
 
 
-def _dialogue(chunk: Path, low: float, high: float, warnings: list[str]) -> list[Dialogue]:
+def _resolve_speaker(label: str, character_names: list[str]) -> str | None:
+    normalized = " ".join(label.casefold().split())
+    if normalized in {"both", "everyone", "group", "offscreen", "unknown"}:
+        return None
+    exact = [name for name in character_names if " ".join(name.casefold().split()) == normalized]
+    aliases = [
+        name
+        for name in character_names
+        if name.split()[0].casefold() == normalized
+        or (len(name.split()) > 1 and name.split()[-1].casefold() == normalized)
+    ]
+    candidates = exact or aliases
+    if len(candidates) == 1:
+        return candidates[0]
+    return None
+
+
+def _labeled_segments(text: str, character_names: list[str]) -> list[tuple[str | None, str]]:
+    marker = re.compile(r"(?<!\w)([A-Z][A-Z0-9 .'-]{0,39}):\s*")
+    matches = list(marker.finditer(text))
+    if not matches:
+        return [(None, text.strip())]
+    leading = text[: matches[0].start()].strip(" -\t")
+    labels = [match.group(1).strip() for match in matches]
+    speakers = [_resolve_speaker(label, character_names) for label in labels]
+    if leading or not all(speakers):
+        # A group/unknown label, or mixed dialogue without a clear boundary, is
+        # preserved as unattributed transcript evidence.
+        if not leading and len(matches) == 1 and labels[0].casefold() in {
+            "both",
+            "everyone",
+            "group",
+            "offscreen",
+            "unknown",
+        }:
+            return [(None, text[matches[0].end() :].strip())]
+        return [(None, text.strip())]
+    segments = []
+    for index, match in enumerate(matches):
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        body = text[match.end() : end].strip(" -\t")
+        if body:
+            segments.append((speakers[index], body))
+    return segments or [(None, text.strip())]
+
+
+def _dialogue_references(
+    text: str, speaker: str | None, character_names: list[str], collection_id: str | None
+) -> list[DialogueReference]:
+    references = []
+    lowered = text.casefold()
+    for name in character_names:
+        aliases = {name.casefold()}
+        first = name.split()[0]
+        if sum(other.split()[0].casefold() == first.casefold() for other in character_names) == 1:
+            aliases.add(first.casefold())
+        mentioned = any(
+            re.search(rf"(?<!\w){re.escape(alias)}(?!\w)", lowered) for alias in aliases
+        )
+        if mentioned:
+            references.append(
+                DialogueReference(
+                    name=name,
+                    character_id=stable_id(
+                        f"character:{collection_id or 'default'}:{' '.join(name.casefold().split())}"
+                    ),
+                    relation="mentioned",
+                    confidence=1.0,
+                    evidence=name,
+                )
+            )
+        job_terms = r"(?:job|work|career|occupation|profession|role|position)"
+        about = any(
+            re.search(
+                rf"(?<!\w){re.escape(alias)}(?:['’]s)?\s+(?:new\s+|current\s+|former\s+)?{job_terms}(?!\w)",
+                lowered,
+            )
+            or re.search(
+                rf"(?<!\w){re.escape(alias)}\s+(?:is|was|works?|worked|became|has|does)\b",
+                lowered,
+            )
+            for alias in aliases
+        )
+        if about:
+            references.append(
+                DialogueReference(
+                    name=name,
+                    character_id=stable_id(
+                        f"character:{collection_id or 'default'}:{' '.join(name.casefold().split())}"
+                    ),
+                    relation="subject",
+                    confidence=1.0,
+                    evidence=name,
+                )
+            )
+    if speaker and re.search(
+        r"\b(?:my\s+(?:job|work|career|occupation|profession|role)|"
+        r"i\s+(?:work|worked)\s+(?:as|in)\s+\w+|"
+        r"i\s+(?:work|worked|am|was|became)\s+(?:as\s+)?(?:a|an|the)\s+\w+|"
+        r"(?:make|makes|made|promote\w*)\s+me\s+(?:(?:a|an|the)\s+)?\w+)",
+        lowered,
+    ) and not any(
+        ref.name.casefold() == speaker.casefold() and ref.relation == "subject"
+        for ref in references
+    ):
+        references.append(
+            DialogueReference(
+                name=speaker,
+                character_id=stable_id(
+                    f"character:{collection_id or 'default'}:{' '.join(speaker.casefold().split())}"
+                ),
+                relation="subject",
+                confidence=1.0,
+                evidence="explicit first-person statement by attributed speaker",
+            )
+        )
+    return references
+
+
+def _dialogue(
+    chunk: Path,
+    low: float,
+    high: float,
+    warnings: list[str],
+    character_names: list[str] | None = None,
+    collection_id: str | None = None,
+) -> list[Dialogue]:
     source = chunk / "subtitles.json"
     metadata = _read_json(source, warnings)
     entries = metadata.get("subtitles_with_timestamps", [])
@@ -185,15 +312,36 @@ def _dialogue(chunk: Path, low: float, high: float, warnings: list[str]) -> list
                 raise ValueError("missing subtitle text")
             if isinstance(entry.get("start"), bool) or isinstance(entry.get("end"), bool):
                 raise ValueError("timestamps must be numbers")
-            line = Dialogue(
-                start=entry["start"], end=entry["end"], text=text.strip(), provenance=provenance
-            )
-            if line.start >= high or line.end <= low:
+            source_start, source_end = float(entry["start"]), float(entry["end"])
+            if source_start >= high or source_end <= low:
                 raise ValueError("subtitle does not overlap its original chunk interval")
-            key = (line.start, line.end, line.text)
-            if key not in seen:
-                dialogue.append(line)
-                seen.add(key)
+            clipped_start, clipped_end = max(source_start, low), min(source_end, high)
+            for speaker, body in _labeled_segments(text.strip(), character_names or []):
+                refs = _dialogue_references(
+                    body, speaker, character_names or [], collection_id
+                )
+                line = Dialogue(
+                    start=clipped_start,
+                    end=clipped_end,
+                    source_start=source_start,
+                    source_end=source_end,
+                    text=body,
+                    speaker=speaker,
+                    speaker_id=(
+                        stable_id(
+                            f"character:{collection_id or 'default'}:{' '.join(speaker.casefold().split())}"
+                        )
+                        if speaker
+                        else None
+                    ),
+                    speaker_confidence=1.0 if speaker else None,
+                    references=refs,
+                    provenance=provenance,
+                )
+                key = (line.start, line.end, line.text)
+                if key not in seen:
+                    dialogue.append(line)
+                    seen.add(key)
         except (KeyError, ValueError, TypeError, ValidationError):
             warnings.append(f"Skipped invalid subtitle {index + 1} at {source}")
     return sorted(dialogue, key=lambda d: (d.start, d.end))
@@ -260,6 +408,22 @@ def _observations(caption: str, provenance: Provenance) -> list[Observation]:
             }:
                 add(kind, line, line)
     return observations
+
+
+def _visual_description(caption: str) -> str:
+    sections = _sections(caption)
+    allowed = {
+        "SCENE SETTING",
+        "CHARACTERS PRESENT",
+        "ACTIONS AND INTERACTIONS",
+        "OBJECTS AND PROPS",
+        "TEMPORAL NOTES",
+    }
+    return "\n".join(
+        f"{heading}:\n" + "\n".join(lines)
+        for heading, lines in sections.items()
+        if heading in allowed and lines
+    )
 
 
 def _probe_duration(
@@ -378,6 +542,18 @@ def import_chunks(
     for episode in episodes:
         aggregate = _read_json(episode / "all_captions.json", result.warnings)
         names = _chunk_names(episode, aggregate)
+        captions = {
+            name: _caption(episode, name, aggregate, result.warnings) for name in names
+        }
+        roster_provenance = Provenance(source=str(episode), method="caption_character_roster")
+        character_names = sorted(
+            {
+                observation.value
+                for caption, _ in captions.values()
+                for observation in _observations(caption, roster_provenance)
+                if observation.kind == ObservationKind.CHARACTER
+            }
+        )
         video_id = stable_id(f"{collection_id}:{episode.name.strip()}")
         full_media = None
         if episode_media_dir is not None:
@@ -404,8 +580,15 @@ def import_chunks(
                 break
             chunk = episode / name
             low, high = (int(name[6:]) - 1) * 60.0, int(name[6:]) * 60.0
-            caption, caption_source = _caption(episode, name, aggregate, result.warnings)
-            dialogue = _dialogue(chunk, low, high, result.warnings)
+            caption, caption_source = captions[name]
+            dialogue = _dialogue(
+                chunk,
+                low,
+                high,
+                result.warnings,
+                character_names=character_names,
+                collection_id=collection_id,
+            )
             if not caption and not dialogue:
                 result.warnings.append(
                     f"Skipped chunk without usable caption or timed subtitles: {chunk}"
@@ -472,6 +655,20 @@ def import_chunks(
                         f"{episode.name}/{name} starts beyond the full-episode duration; "
                         "retained original clip or metadata-only availability"
                     )
+            if start is not None and end is not None:
+                bounded_dialogue = []
+                for line in dialogue:
+                    clipped_start = max(line.start, start)
+                    clipped_end = min(line.end, end)
+                    if clipped_end > clipped_start:
+                        line.start = clipped_start
+                        line.end = clipped_end
+                        bounded_dialogue.append(line)
+                dialogue = bounded_dialogue
+            observations = _observations(caption, provenance)
+            if start is not None and end is not None:
+                for observation in observations:
+                    observation.start, observation.end = start, end
             episode_scenes.append(
                 Scene(
                     scene_id=stable_id(f"{collection_id}:{episode.name.strip()}:{name}"),
@@ -482,9 +679,11 @@ def import_chunks(
                     start=start,
                     end=end,
                     timestamp_basis=basis,
-                    description=caption,
+                    description=_visual_description(caption),
+                    visual_description=_visual_description(caption),
+                    scene_summary="",
                     dialogue=dialogue,
-                    observations=_observations(caption, provenance),
+                    observations=observations,
                     provenance=([provenance] if caption else [])
                     + [chunk_provenance]
                     + media_provenance,

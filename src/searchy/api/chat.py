@@ -4,11 +4,10 @@ import threading
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
-from searchy.core.config import Settings
+from searchy.core import Settings
 from searchy.domain import Record
-from searchy.services.chat import ChatService
 
 
 class ChatRequest(Record):
@@ -26,6 +25,7 @@ class ChatRequest(Record):
 
 
 class ChatSource(Record):
+    model_config = ConfigDict(extra="ignore")
     number: int
     scene_id: str
     label: str
@@ -34,6 +34,7 @@ class ChatSource(Record):
     timestamp_basis: str = ""
     available: bool = False
     snippet: str = ""
+    description: str = ""
 
 
 class ChatReply(Record):
@@ -49,6 +50,7 @@ def _frame(event: str, payload: dict) -> bytes:
 
 
 def create_chat_router(settings: Settings, services, authorize) -> APIRouter:
+    from searchy.services import ChatService
     router = APIRouter(prefix="/api/chat", dependencies=[Depends(authorize)])
 
     def service(svc) -> ChatService:

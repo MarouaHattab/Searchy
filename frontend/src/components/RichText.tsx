@@ -1,12 +1,10 @@
 import { Fragment, type ReactNode } from 'react'
 
-/**
- * Renders the small Markdown subset a local model actually emits: bold, italics,
- * inline code, bullet and numbered lists, and paragraph breaks. A full Markdown
- * library would be a large dependency for that, and untrusted model output is
- * safer rendered as text nodes than as HTML.
- */
-function inline(text: string, keyPrefix: string): ReactNode[] {
+function inline(
+  text: string,
+  keyPrefix: string,
+  onCitationClick?: (num: number) => void
+): ReactNode[] {
   const nodes: ReactNode[] = []
   const pattern = /(\*\*[^*]+\*\*|\*[^*\n]+\*|`[^`]+`|\[\d+\])/g
   let last = 0
@@ -20,20 +18,33 @@ function inline(text: string, keyPrefix: string): ReactNode[] {
       nodes.push(<strong key={key}>{token.slice(2, -2)}</strong>)
     else if (token.startsWith('`'))
       nodes.push(<code key={key}>{token.slice(1, -1)}</code>)
-    else if (token.startsWith('['))
+    else if (token.startsWith('[')) {
+      const num = parseInt(token.slice(1, -1), 10)
       nodes.push(
-        <span className="chat-citation" key={key}>
+        <button
+          type="button"
+          className="chat-citation interactive"
+          key={key}
+          onClick={() => onCitationClick?.(num)}
+          title={`Open source [${num}]`}
+        >
           {token}
-        </span>
+        </button>
       )
-    else nodes.push(<em key={key}>{token.slice(1, -1)}</em>)
+    } else nodes.push(<em key={key}>{token.slice(1, -1)}</em>)
     last = match.index + token.length
   }
   if (last < text.length) nodes.push(text.slice(last))
   return nodes
 }
 
-export function RichText({ text }: { text: string }) {
+export function RichText({
+  text,
+  onCitationClick,
+}: {
+  text: string
+  onCitationClick?: (num: number) => void
+}) {
   const lines = text.split(/\r?\n/)
   const blocks: ReactNode[] = []
   let list: { ordered: boolean; items: string[] } | null = null
@@ -41,7 +52,11 @@ export function RichText({ text }: { text: string }) {
 
   const flushParagraph = () => {
     if (!paragraph.length) return
-    blocks.push(<p key={`p${blocks.length}`}>{inline(paragraph.join(' '), `p${blocks.length}`)}</p>)
+    blocks.push(
+      <p key={`p${blocks.length}`}>
+        {inline(paragraph.join(' '), `p${blocks.length}`, onCitationClick)}
+      </p>
+    )
     paragraph = []
   }
   const flushList = () => {
@@ -50,7 +65,7 @@ export function RichText({ text }: { text: string }) {
     blocks.push(
       <Tag key={`l${blocks.length}`}>
         {list.items.map((item, index) => (
-          <li key={index}>{inline(item, `l${blocks.length}-${index}`)}</li>
+          <li key={index}>{inline(item, `l${blocks.length}-${index}`, onCitationClick)}</li>
         ))}
       </Tag>
     )

@@ -5,10 +5,9 @@ from fastapi.responses import FileResponse
 from pydantic import Field
 from starlette.concurrency import run_in_threadpool
 
-from searchy.api.schemas import JobResponse
-from searchy.core.errors import InvalidInput
+from searchy.core import InvalidInput
 from searchy.domain import Record
-from searchy.services.characters import CharacterService
+from .schemas import JobResponse
 
 
 class CharacterCreate(Record):

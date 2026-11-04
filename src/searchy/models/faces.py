@@ -3,7 +3,7 @@ import math
 from dataclasses import dataclass
 from pathlib import Path
 
-from searchy.core.errors import InvalidInput, SearchyError
+from searchy.core import InvalidInput, SearchyError
 
 
 @dataclass(frozen=True)

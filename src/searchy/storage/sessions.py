@@ -3,7 +3,7 @@ import json
 import time
 from uuid import uuid4
 
-from searchy.core.errors import SearchyError
+from searchy.core import SearchyError
 
 
 class SearchSessions:
@@ -70,7 +70,7 @@ class SearchSessions:
                     del data["contexts"][key]
             except SearchyError:
                 del data["contexts"][key]
-        from searchy.retrieval.search import playback
+        from searchy.retrieval import playback
 
         for result in data["response"].get("results", []):
             result["playback"] = playback(self.metadata.get_scene(result["scene_id"]))

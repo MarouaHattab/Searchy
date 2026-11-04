@@ -4,8 +4,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from searchy.core.config import Settings
-from searchy.core.errors import InvalidInput, SearchyError
+from searchy.core import InvalidInput, SearchyError, Settings
 
 VIDEO_SUFFIXES = {".mp4", ".mkv", ".mov", ".avi", ".m4v", ".webm"}
 SUBTITLE_SUFFIXES = (".vtt", ".srt")

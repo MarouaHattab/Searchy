@@ -2,11 +2,10 @@ import re
 from collections import defaultdict
 from pathlib import Path
 
-from searchy.core.config import Settings
-from searchy.core.errors import InvalidInput, SearchyError
-from searchy.domain import Candidate, Scene, stable_id
-from searchy.storage.characters import CharacterStore
-from searchy.storage.metadata import MetadataStore
+from searchy.core import InvalidInput, SearchyError, Settings
+from searchy.domain import Candidate, Scene, stable_id, visual_description
+from searchy.storage import CharacterStore, MetadataStore
+from .bm25 import BM25Index
 
 STOP_WORDS = set(
     "find show scene scenes where someone somebody wearing wears is are a an the me in on of to with and or says say saying they their outfit outfits clothes clothing please video videos that he she you i it your this for at as be by from".split()
@@ -290,8 +289,21 @@ def playback(scene: Scene) -> dict:
 def scene_view(scene: Scene) -> dict:
     return {
         **scene.model_dump(exclude={"media", "frames"}),
+        "description": scene.visual_text,
+        "visual_description": scene.visual_text,
+        "scene_summary": scene.scene_summary,
         "characters": scene.characters,
         "character_ids": scene.character_ids,
+        "related_characters": scene.related_characters,
+        "related_character_ids": scene.related_character_ids,
+        "visual_characters": scene.visual_characters,
+        "visual_character_ids": scene.visual_character_ids,
+        "speakers": scene.speakers,
+        "speaker_ids": scene.speaker_ids,
+        "mentioned_characters": scene.mentioned_characters,
+        "mentioned_character_ids": scene.mentioned_character_ids,
+        "subject_characters": scene.subject_characters,
+        "subject_character_ids": scene.subject_character_ids,
         "playback": playback(scene),
     }
 
@@ -302,6 +314,13 @@ class SearchEngine:
         self.metadata = metadata
         self.graph = graph
         self.vectors = vectors
+        self.bm25 = BM25Index()
+
+    def _ensure_bm25_index(self) -> None:
+        if self.bm25.total_docs == 0:
+            _, records, _ = self.metadata.catalog_records()
+            scenes = [scene for scene, indexed in records if indexed]
+            self.bm25.index_scenes(scenes)
 
     def requested_characters(self, query: str, collection_id: str | None) -> list[str]:
         known = set(self.metadata.characters(collection_id))
@@ -348,7 +367,7 @@ class SearchEngine:
                 identifier
                 for scene, _ in records
                 if collection_id is None or scene.collection_id == collection_id
-                for identifier in scene.character_ids
+                for identifier in scene.related_character_ids
             }
             known_ids.update(character["id"] for character in registered)
             if not set(character_ids) <= known_ids:
@@ -372,7 +391,7 @@ class SearchEngine:
             character_ids = [values[0]["id"] for values in matches.values()] or None
         requested = characters or self.requested_characters(query, collection_id)
         from searchy.retrieval.understanding import clothing_query as outfit_query
-        from searchy.retrieval.understanding import understand
+        from searchy.retrieval.understanding import profession_evidence, understand
 
         plan = understand(query, requested)
         graph_query = " ".join(sorted(plan.content_tokens))
@@ -408,10 +427,11 @@ class SearchEngine:
             for scene, indexed in records:
                 if not indexed or (collection_id and scene.collection_id != collection_id):
                     continue
-                if character_ids and not set(character_ids) <= set(scene.character_ids):
+                if character_ids and not set(character_ids) <= set(scene.related_character_ids):
                     continue
                 if not all(
-                    any(character_matches(c, name) for c in scene.characters) for name in requested
+                    any(character_matches(c, name) for c in scene.related_characters)
+                    for name in requested
                 ):
                     continue
                 if dialogue_matches(
@@ -429,6 +449,19 @@ class SearchEngine:
                         collection_id,
                         self.settings.candidate_limit,
                         **identity_filter,
+                    ),
+                )
+            )
+        if mode in {"hybrid", "sparse"}:
+            self._ensure_bm25_index()
+            operations.append(
+                (
+                    "sparse",
+                    lambda: self.bm25.search(
+                        query,
+                        limit=self.settings.candidate_limit,
+                        collection_id=collection_id,
+                        character_ids=character_ids,
                     ),
                 )
             )
@@ -460,6 +493,32 @@ class SearchEngine:
             except SearchyError as exc:
                 errors.append(str(exc))
                 warnings.append(f"{name} retrieval unavailable: {exc}")
+
+        top_episodes = []
+        if mode == "hybrid":
+            try:
+                top_episodes = self.vectors.search_episodes(query, limit=3, collection_id=collection_id)
+                if top_episodes:
+                    macro_candidates = []
+                    seen_macro_sids = set()
+                    for ep in top_episodes:
+                        ep_title = ep.get("title", "")
+                        for sid in ep.get("supporting_scene_ids", []):
+                            if sid not in seen_macro_sids:
+                                seen_macro_sids.add(sid)
+                                macro_candidates.append(
+                                    Candidate(
+                                        scene_id=sid,
+                                        score=round(ep.get("score", 0.5), 4),
+                                        channel="macro",
+                                        evidence=[f"Episode Arc: {ep_title}"],
+                                    )
+                                )
+                    if macro_candidates:
+                        channels["macro"] = macro_candidates[: self.settings.candidate_limit]
+            except Exception as exc:
+                warnings.append(f"macro episode retrieval unavailable: {exc}")
+
         if not channels:
             raise SearchyError("Retrieval is unavailable. " + "; ".join(errors))
 
@@ -477,7 +536,7 @@ class SearchEngine:
             for rank, candidate in enumerate(candidates, 1):
                 if candidate.score < threshold:
                     continue
-                fused[candidate.scene_id] += 1 / (60 + rank)
+                fused[candidate.scene_id] += (0.60 if name == "dialogue" else 0.50 if name == "text" else 0.40 if name == "sparse" else 0.35 if name == "macro" else 0.30 if name == "graph" else 0.20) / (60 + rank)
                 evidence[candidate.scene_id].update(candidate.evidence)
                 matched_channels[candidate.scene_id][name] = candidate.score
 
@@ -486,9 +545,7 @@ class SearchEngine:
         content_tokens = query_tokens - name_tokens
         action_terms = normalized_terms(" ".join(content_tokens)) & ACTION_WORDS
         quoted = re.findall(r'["“](.+?)["”]', query)
-        dialogue_intent = bool(
-            quoted or re.search(r"\b(says?|saying|dialogue|quote)\b", query.lower())
-        )
+        dialogue_intent = plan.dialogue_intent
         dialogue_target = content_tokens - {"dialogue", "quote"}
         clothing_query = outfit_query(query)
         if dialogue_intent:
@@ -504,19 +561,74 @@ class SearchEngine:
                 continue
             if collection_id is not None and scene.collection_id != collection_id:
                 continue
-            if character_ids and not set(character_ids) <= set(scene.character_ids):
+            if character_ids and not set(character_ids) <= set(scene.related_character_ids):
                 continue
-            if not all(
-                any(character_matches(c, name) for c in scene.characters) for name in requested
-            ):
-                continue
+            score_boost = 0.0
+            if requested:
+                has_all_chars = all(
+                    any(character_matches(c, name) for c in scene.related_characters)
+                    for name in requested
+                )
+                has_any_chars = any(
+                    any(character_matches(c, name) for c in scene.related_characters)
+                    for name in requested
+                )
+                if not has_any_chars:
+                    continue
+                if len(requested) > 1:
+                    if has_all_chars:
+                        score_boost += 0.25
+                    else:
+                        score_boost -= 0.10
+
+            if plan.visual_intent and requested:
+                if all(any(character_matches(actual, name) for actual in scene.visual_characters) for name in requested):
+                    score_boost += 0.20
+                elif any(any(character_matches(actual, name) for actual in scene.visual_characters) for name in requested):
+                    score_boost += 0.10
+
+            if plan.profession_intent:
+                has_prof = (
+                    any(o.kind.value == "profession" for o in scene.observations)
+                    or any(profession_evidence(d.text) for d in scene.dialogue)
+                )
+                if has_prof:
+                    score_boost += 0.25
+
+            if plan.mention_intent and requested:
+                has_mention = (
+                    any(any(name.lower() in d.text.lower() for name in requested) for d in scene.dialogue)
+                    or bool(scene.mentioned_characters)
+                )
+                if has_mention:
+                    score_boost += 0.20
+
+            if plan.speaker_identity_intent and requested:
+                if any(d.speaker and any(character_matches(d.speaker, name) for name in requested) for d in scene.dialogue):
+                    score_boost += 0.25
             if not clothing_matches(clothing_query, scene, requested, character_ids):
                 continue
             timing = simultaneous_timing(query, scene, requested, character_ids, action_terms)
             if timing == "disjoint":
                 continue
             transcript = " ".join(d.text for d in scene.dialogue)
-            if dialogue_intent and not dialogue_matches(transcript, quoted, dialogue_target):
+            if plan.speaker_identity_intent and not scene.dialogue:
+                continue
+            if (
+                dialogue_intent
+                and not plan.mention_intent
+                and not plan.speaker_identity_intent
+                and not dialogue_matches(transcript, quoted, dialogue_target)
+            ):
+                continue
+            if plan.dialogue_intent and requested and not plan.mention_intent and not all(
+                speaker_matches(scene, name, quoted, dialogue_target) for name in requested
+            ):
+                continue
+            if character_ids and plan.dialogue_intent and not plan.mention_intent and not all(
+                speaker_matches(scene, "", quoted, dialogue_target, identifier)
+                for identifier in character_ids
+            ):
                 continue
             observed = normalized_terms(scene.search_text())
             missing_content = sorted(
@@ -557,6 +669,7 @@ class SearchEngine:
             speaker_unverified = bool(
                 dialogue_intent
                 and requested
+                and not plan.mention_intent
                 and not all(
                     speaker_matches(scene, name, quoted, dialogue_target) for name in requested
                 )
@@ -576,12 +689,22 @@ class SearchEngine:
                 or any(character_matches(o.value, name) for name in requested)
             ]
             relevant_dialogue = [
-                d.model_dump() for d in scene.dialogue if tokens(d.text) & content_tokens
+                d.model_dump() | {"speaker_name": d.speaker or "UNKNOWN"}
+                for d in scene.dialogue
+                if tokens(d.text) & content_tokens
             ]
-            supporting = list(dict.fromkeys([*lexical_evidence, *sorted(evidence[scene_id])]))[:8]
+            supporting = list(
+                dict.fromkeys(
+                    [
+                        *lexical_evidence,
+                        *(visual_description(item) for item in sorted(evidence[scene_id])),
+                    ]
+                )
+            )[:8]
             score = (
                 fusion * 20
                 + overlap * 0.6
+                + score_boost
                 - len(missing_content) / max(1, len(content_tokens)) * 0.3
             )
             if association_unverified or speaker_unverified or timing == "unverified":
@@ -597,9 +720,21 @@ class SearchEngine:
                     "start": scene.start,
                     "end": scene.end,
                     "timestamp_basis": scene.timestamp_basis,
-                    "description": scene.description[:700],
+                    "description": scene.visual_text[:700],
+                    "visual_description": scene.visual_text[:700],
+                    "scene_summary": scene.scene_summary,
+                    "visual_characters": scene.visual_characters,
+                    "visual_character_ids": scene.visual_character_ids,
+                    "speakers": scene.speakers,
+                    "speaker_ids": scene.speaker_ids,
+                    "mentioned_characters": scene.mentioned_characters,
+                    "mentioned_character_ids": scene.mentioned_character_ids,
+                    "subject_characters": scene.subject_characters,
+                    "subject_character_ids": scene.subject_character_ids,
+                    "related_characters": scene.related_characters,
+                    "related_character_ids": scene.related_character_ids,
                     "matching_characters": scene.characters,
-                    "matching_character_ids": scene.character_ids,
+                    "matching_character_ids": scene.related_character_ids,
                     "evidence_timestamps": sorted(
                         {
                             observation.start
@@ -675,4 +810,5 @@ class SearchEngine:
             partial=bool(errors) or any(result["missing_terms"] for result in selected),
             aggregate=aggregate,
             shape=plan.shape,
+            episode_summaries=top_episodes,
         )

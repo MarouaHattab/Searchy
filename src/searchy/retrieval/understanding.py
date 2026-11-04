@@ -1,7 +1,7 @@
 import re
 from dataclasses import dataclass
 
-from searchy.retrieval.search import (
+from .search import (
     ACTION_WORDS,
     CLOTHING_MODIFIERS,
     GARMENTS,
@@ -28,7 +28,8 @@ QUERY_TYPES = {
 _QUOTED = re.compile(r'["“](.+?)["”]')
 
 _DIALOGUE_CUES = re.compile(
-    r"\b(says?|said|saying|words?|dialogue|quote[ds]?|line|tells?|told|asks?|asked|mentions?)\b",
+    r"\b(says?|said|saying|speaks?|speaking|speaker|words?|dialogue|quote[ds]?|line|"
+    r"tells?|told|asks?|asked|mentions?|talks? about)\b",
     re.I,
 )
 _CLOTHING_CUES = re.compile(
@@ -61,6 +62,30 @@ _TEMPORAL_CUES = re.compile(
 )
 _VISUAL_CUES = re.compile(
     r"\b(show|find|picture|image|look like|see|visible|appears? in frame|close-up)\b", re.I
+)
+_PRESENCE_CUES = re.compile(
+    r"\b(visible|on screen|present in (?:the )?scene|who is in (?:the )?scene|"
+    r"characters? (?:are )?there|appears? in (?:the )?scene)\b",
+    re.I,
+)
+_PROFESSION_CUES = re.compile(
+    r"\b(job|profession|occupation|career|work|works|role|what does .+ do for a living)\b",
+    re.I,
+)
+_PROFESSION_EVIDENCE = re.compile(
+    r"\b(?:job\s+(?:is|as)|works?\s+(?:as|in)|occupation|profession|career\s+as|"
+    r"(?:barista|bartender|supervisor|manager|waiter|waitress|doctor|nurse|teacher|"
+    r"professor|engineer|lawyer|actor|actress|chef|pilot|cashier|clerk|writer|artist|"
+    r"musician|accountant|police officer|firefighter|secretary|receptionist|assistant|"
+    r"developer|designer|consultant|salesperson|driver|mechanic|president|director|"
+    r"technician|scientist|architect|therapist|veterinarian|programmer|superintendent))\b",
+    re.I,
+)
+_MENTION_CUES = re.compile(r"\b(mention(?:ed)?|refers? to|talk(?:s|ed|ing)? about)\b", re.I)
+_SPEAKER_ID_CUES = re.compile(
+    r"\b(who(?:'s| is) speaking|who speaks?|who is talking|who(?:'s| is) the speaker|"
+    r"speaker identity|identify the speaker)\b",
+    re.I,
 )
 
 # Question shapes that a ranked scene list cannot answer on its own. Each maps
@@ -117,6 +142,11 @@ SCAFFOLDING_WORDS = {
     "happening",
     "describe",
     "talk about",
+    "speaker",
+    "speaking",
+    "speaks",
+    "mentioned",
+    "mention",
     "while",
     "simultaneously",
     "same",
@@ -133,6 +163,10 @@ class QueryUnderstanding:
     action_terms: frozenset[str]
     content_tokens: frozenset[str]
     dialogue_intent: bool
+    speaker_identity_intent: bool
+    profession_intent: bool
+    visual_intent: bool
+    mention_intent: bool
     narrative: bool
     temporal: bool
     missing_constraints: tuple[str, ...]
@@ -170,6 +204,10 @@ def clothing_query(query: str) -> str:
     return stripped
 
 
+def profession_evidence(text: str) -> bool:
+    return bool(_PROFESSION_EVIDENCE.search(text))
+
+
 def understand(
     query: str,
     requested_characters: list[str] | tuple[str, ...],
@@ -178,10 +216,24 @@ def understand(
     quoted = tuple(match.strip() for match in _QUOTED.findall(query) if match.strip())
     characters = tuple(requested_characters)
     name_tokens = {token for name in characters for token in tokens(name)}
+    name_tokens.update(f"{token}s" for token in tuple(name_tokens))
     all_tokens = tokens(query) - STOP_WORDS - SCAFFOLDING_WORDS
+    all_tokens -= {"whats", "whos", "wheres", "hows"}
     content_tokens = all_tokens - name_tokens
 
+    unquoted = _QUOTED.sub("", lowered)
     dialogue_intent = bool(quoted or _DIALOGUE_CUES.search(lowered))
+    speaker_identity_intent = bool(_SPEAKER_ID_CUES.search(unquoted))
+    profession_intent = bool(_PROFESSION_CUES.search(unquoted))
+    if profession_intent:
+        content_tokens -= {"job", "profession", "occupation", "career", "work", "works", "role"}
+    visual_intent = bool(
+        _PRESENCE_CUES.search(unquoted)
+        or _VISUAL_CUES.search(unquoted)
+        or _APPEARANCE_CUES.search(unquoted)
+        or _CLOTHING_CUES.search(unquoted)
+    )
+    mention_intent = bool(_MENTION_CUES.search(unquoted))
     clothing_query = _QUOTED.sub("", query)
     clothing_cue = bool(_CLOTHING_CUES.search(clothing_query))
     clothing = tuple(garment_phrases(clothing_query))
@@ -281,6 +333,10 @@ def understand(
         action_terms=action_terms,
         content_tokens=frozenset(content_tokens),
         dialogue_intent=dialogue_intent,
+        speaker_identity_intent=speaker_identity_intent,
+        profession_intent=profession_intent,
+        visual_intent=visual_intent,
+        mention_intent=mention_intent,
         narrative=narrative,
         temporal=temporal,
         missing_constraints=tuple(hints),
@@ -295,5 +351,6 @@ __all__ = [
     "QueryUnderstanding",
     "clothing_query",
     "garment_phrases",
+    "profession_evidence",
     "understand",
 ]

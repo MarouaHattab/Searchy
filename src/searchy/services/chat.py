@@ -1,12 +1,25 @@
+
+def _clean_source(src: dict) -> dict:
+    return {
+        "number": src.get("number"),
+        "scene_id": src.get("scene_id", ""),
+        "label": src.get("label", ""),
+        "start": src.get("start"),
+        "end": src.get("end"),
+        "timestamp_basis": src.get("timestamp_basis", ""),
+        "available": src.get("available", False),
+        "snippet": src.get("snippet", ""),
+        "description": src.get("description", "") or src.get("snippet", ""),
+    }
 import json
 import re
 
 import httpx
 
-from searchy.core.config import Settings
-from searchy.core.errors import InvalidInput, SearchyError
-from searchy.retrieval.understanding import understand
-from searchy.services.answers import AnswerService
+from searchy.core import InvalidInput, SearchyError, Settings
+from searchy.models import ClaimVerifier
+from .answers import AnswerService
+from searchy.retrieval import understand
 
 _HEADINGS = (
     "SCENE SETTING",
@@ -24,22 +37,32 @@ If they do not contain the answer, say so plainly instead of guessing.
 Cite the source numbers you used, like [1] or [2], at the end of a sentence.
 Never invent a timestamp, an episode, a character or a quote.
 
+Season 1 Boundaries:
+- This collection strictly covers Friends Season 1 (24 episodes).
+- Never incorporate facts or relationships from subsequent seasons (such as Ross and Rachel being married, moving to London or Paris, having children together, or working at Ralph Lauren).
+- In Season 1, Ross and Rachel do not date or marry; Rachel only discovers Ross has feelings for her in the Season 1 finale (1x24).
+- Every statement must be supported by the supplied sources.
+
 Counting questions:
 - A counted list in the sources is authoritative. Report its figure as the answer.
 - Do not add up rows yourself if a total is already given.
 - Do not count mentions inside prose; count the entries the sources list.
 
 Grounding:
-- Subtitles describe what is said; captions describe what is seen. Do not treat
-  one as proof of the other, and do not assume a name in a caption is correct.
+- Visible presence, speaker identity, dialogue mention, and dialogue subject are
+  separate evidence. A visible character is not a speaker. UNKNOWN stays unknown.
+- Use transcript speaker labels only when attached to that exact line. Captions
+  describe visual evidence; never use them to assign speech or conversation roles.
 - If the sources disagree, say so rather than picking one.
 - If a source only partly answers the question, say what is missing.
 
 Style:
 - Answer in the language the question was asked in.
-- Lead with the direct answer, then the supporting detail. No preamble.
-- Keep it to a few sentences unless the question needs more. Do not restate
-  the question and do not describe the interface.
+- Provide a detailed, comprehensive, and well-explained narrative answering the question thoroughly.
+- Explain the character interactions, motivations, context, and chronological progression in depth.
+- Support EVERY factual statement by citing the corresponding source numbers, like [1] or [2], directly at the end of that sentence.
+- Organize the explanation clearly with structured paragraphs and logical flow.
+- Do not describe the interface.
 """
 
 
@@ -95,10 +118,36 @@ def _matching_dialogue(scene, query: str, limit: int = 3) -> str:
         if hits:
             scored.append((hits, line))
     if not scored:
-        joined = " ".join(line.text for line in scene.dialogue)
-        return joined[:220]
-    scored.sort(key=lambda item: -item[0])
-    return " ".join(line.text for _, line in scored[:limit])[:320]
+        matching = scene.dialogue[:limit]
+    else:
+        scored.sort(key=lambda item: -item[0])
+        matching = [line for _, line in scored[:limit]]
+    return " ".join(
+        f"{line.speaker or 'UNKNOWN'} ({line.start:.2f}-{line.end:.2f}s): {line.text}"
+        + (
+            " [mentioned: "
+            + ", ".join(
+                reference.name
+                for reference in line.references
+                if reference.relation == "mentioned"
+            )
+            + "]"
+            if any(reference.relation == "mentioned" for reference in line.references)
+            else ""
+        )
+        + (
+            " [about: "
+            + ", ".join(
+                reference.name
+                for reference in line.references
+                if reference.relation == "subject"
+            )
+            + "]"
+            if any(reference.relation == "subject" for reference in line.references)
+            else ""
+        )
+        for line in matching
+    )[:320]
 
 
 _PRONOUN = re.compile(r"\b(he|she|him|her|his|hers|they|them|their)\b", re.I)
@@ -154,8 +203,9 @@ class ChatService:
         self.chat = chat
         self.graph = graph
         self.answers = AnswerService(settings, metadata, search, graph=graph)
+        self.verifier = ClaimVerifier(settings)
 
-    def _sources(self, query: str, collection_id: str | None, limit: int) -> tuple[list, list]:
+    def _sources(self, query: str, collection_id: str | None, limit: int) -> tuple[list, list, list]:
         result = self.search.search(query, limit=limit, collection_id=collection_id)
         scenes = []
         for match in result.get("results", []):
@@ -163,12 +213,36 @@ class ChatService:
             if scene is None:
                 continue
             scenes.append((scene, match))
-        return scenes, result.get("warnings", [])
+        return scenes, result.get("warnings", []), result.get("episode_summaries", [])
 
-    def _context(self, scenes, query: str = "") -> tuple[str, list[dict]]:
+    def _context(self, scenes, query: str = "", episode_summaries: list | None = None) -> tuple[str, list[dict]]:
         blocks = []
         sources = []
-        for number, (scene, _match) in enumerate(scenes, 1):
+        source_idx = 1
+        if episode_summaries:
+            for ep in episode_summaries[:3]:
+                ev_lines = [ev.get("description", "") for ev in ep.get("events", [])[:3] if ev.get("description")]
+                milestone_body = f"{ep.get('macro_summary', '')} {' '.join(ev_lines)}".strip()
+                blocks.append(f"[{source_idx}] EPISODE MILESTONE ({ep.get('title')}):\n    {milestone_body}")
+                sources.append(
+                    {
+                        "number": source_idx,
+                        "scene_id": "",
+                        "label": f"Episode Milestone: {ep.get('title')}",
+                        "start": None,
+                        "end": None,
+                        "timestamp_basis": "summary",
+                        "available": False,
+                        "snippet": milestone_body[:180],
+                        "seen": "",
+                        "said": "",
+                        "description": milestone_body,
+                        "text": milestone_body,
+                    }
+                )
+                source_idx += 1
+
+        for number, (scene, _match) in enumerate(scenes, source_idx):
             lines = [f"[{number}] {scene.episode_id or scene.video_id}"]
             if scene.start is not None and scene.end is not None:
                 lines.append(f"    time: {scene.start:.1f}s to {scene.end:.1f}s")
@@ -177,7 +251,7 @@ class ChatService:
             # unrelated clause become "evidence", so only the passage that
             # actually matched is shown, plus the structured fields this
             # question is about.
-            caption = " ".join(_MARKUP.sub(" ", scene.description or "").split())
+            caption = " ".join(_MARKUP.sub(" ", scene.visual_text or "").split())
             passage = _matching_passage(caption, query)
             if passage:
                 lines.append(f"    seen: {passage}")
@@ -198,6 +272,9 @@ class ChatService:
                     "timestamp_basis": scene.timestamp_basis,
                     "available": bool(scene.media and scene.media.path),
                     "snippet": (caption or spoken)[:180],
+                    "seen": passage or caption,
+                    "said": spoken or " ".join(f"{d.speaker}: {d.text}" for d in scene.dialogue if d.text),
+                    "text": "\n".join(lines),
                 }
             )
         return "\n\n".join(blocks), sources
@@ -215,7 +292,18 @@ class ChatService:
         )
         return messages
 
+    def _use_nim(self) -> bool:
+        """Whether chat should use NVIDIA NIM instead of local Ollama."""
+        return (
+            self.settings.llm_provider == "NVIDIA_NIM"
+            and bool(self.settings.nvidia_nim_api_key.get_secret_value())
+        )
+
     def _endpoint(self) -> tuple[str, str]:
+        if self._use_nim():
+            base = self.settings.nvidia_nim_base_url.rstrip("/")
+            model = self.settings.nvidia_nim_model or self.settings.chat_model
+            return base, model
         base = self.settings.vllm_base_url.rstrip("/")
         if base.endswith("/v1"):
             base = base[: -len("/v1")]
@@ -248,8 +336,8 @@ class ChatService:
         plan = understand(resolved, self.search.requested_characters(resolved, collection_id))
 
         # The API sends the opening frame; the service starts at retrieval.
-        scenes, warnings = self._sources(resolved, collection_id, self.settings.chat_source_limit)
-        context, sources = self._context(scenes, resolved)
+        scenes, warnings, episode_summaries = self._sources(resolved, collection_id, self.settings.chat_source_limit)
+        context, sources = self._context(scenes, resolved, episode_summaries)
         # "Where does Monica work?" asks for a relation between a person and a
         # place. Ranking scenes by whether they mention Monica returns every
         # scene she is in, so the character's locations are fetched from the
@@ -318,39 +406,79 @@ class ChatService:
                         f"Rows: {summary}\n\n{context}"
                     )
 
-        yield "sources", {"sources": sources, "warnings": warnings}
+        yield "sources", {"sources": [_clean_source(s) for s in sources], "warnings": warnings}
         messages = self._messages(resolved, history, context)
-        payload = {
-            "model": model,
-            "messages": messages,
-            "stream": True,
-            "think": False,
-            "options": {
-                "num_ctx": self.settings.chat_context,
+
+        use_nim = self._use_nim()
+
+        if use_nim:
+            # NVIDIA NIM uses OpenAI-compatible chat completions
+            payload = {
+                "model": model,
+                "messages": messages,
+                "stream": True,
                 "temperature": self.settings.chat_temperature,
-                "num_predict": self.settings.chat_max_tokens,
-            },
-        }
+                "max_tokens": self.settings.chat_max_tokens,
+            }
+        else:
+            # Local Ollama native format
+            payload = {
+                "model": model,
+                "messages": messages,
+                "stream": True,
+                "think": False,
+                "options": {
+                    "num_ctx": self.settings.chat_context,
+                    "temperature": self.settings.chat_temperature,
+                    "num_predict": self.settings.chat_max_tokens,
+                },
+            }
 
         answer = []
         try:
-            with httpx.Client(timeout=max(self.settings.provider_timeout_seconds * 8, 600)) as client:
-                with client.stream("POST", f"{base}/api/chat", json=payload) as response:
-                    if not response.is_success:
-                        raise SearchyError(f"Chat model returned HTTP {response.status_code}")
-                    for line in response.iter_lines():
-                        if not line.strip():
-                            continue
-                        try:
-                            data = json.loads(line)
-                        except ValueError:
-                            continue
-                        piece = (data.get("message") or {}).get("content") or ""
-                        if piece:
-                            answer.append(piece)
-                            yield "delta", {"text": piece}
-                        if data.get("done"):
-                            break
+            timeout = max(self.settings.provider_timeout_seconds * 8, 600)
+            if use_nim:
+                # NIM: OpenAI SSE streaming format
+                headers = {"Authorization": f"Bearer {self.settings.nvidia_nim_api_key.get_secret_value()}"}
+                url = f"{base}/chat/completions"
+                with httpx.Client(timeout=timeout) as client:
+                    with client.stream("POST", url, headers=headers, json=payload) as response:
+                        if not response.is_success:
+                            raise SearchyError(f"Chat model returned HTTP {response.status_code}")
+                        for line in response.iter_lines():
+                            if not line.startswith("data:"):
+                                continue
+                            data_str = line[5:].strip()
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                data = json.loads(data_str)
+                            except ValueError:
+                                continue
+                            choice = (data.get("choices") or [{}])[0]
+                            piece = (choice.get("delta") or {}).get("content") or ""
+                            if piece:
+                                answer.append(piece)
+                                yield "delta", {"text": piece}
+            else:
+                # Ollama: native streaming JSON format
+                with httpx.Client(timeout=timeout) as client:
+                    with client.stream("POST", f"{base}/api/chat", json=payload) as response:
+                        if not response.is_success:
+                            raise SearchyError(f"Chat model returned HTTP {response.status_code}")
+                        for line in response.iter_lines():
+                            if not line.strip():
+                                continue
+                            try:
+                                data = json.loads(line)
+                            except ValueError:
+                                continue
+                            piece = (data.get("message") or {}).get("content") or ""
+                            if piece:
+                                answer.append(piece)
+                                yield "delta", {"text": piece}
+                            if data.get("done"):
+                                break
         except httpx.RequestError:
             raise SearchyError(f"Chat model at {base} is unreachable") from None
 
@@ -363,24 +491,18 @@ class ChatService:
         # chat used to show the model's text unchecked. A citation that points
         # past the supplied sources is the cheapest reliable signal that the
         # model invented its support, so it is checked here before display.
-        cited = {int(n) for n in re.findall(r"\[(\d+)\]", text)}
-        available = {source["number"] for source in sources}
-        invalid = sorted(cited - available)
-        if invalid:
-            note = (
-                "The model cited sources that were not provided, so this answer is "
-                "unverified. Treat it as a lead and check the scenes below."
-            )
-            warnings.append(note)
-            text = f"{text}\n\n_{note}_"
-            yield "delta", {"text": f"\n\n{note}"}
+        # Grounding & Claim-Level Entailment Verification
+        verified_text, claim_warnings, claim_results = self.verifier.verify_answer(text, sources)
+        warnings.extend(claim_warnings)
+        if claim_warnings and verified_text != text:
+            text = verified_text
 
         # A generator's return value is invisible to a `for` loop, so the
         # finished answer travels as an event instead.
         yield "answer", {
             "conversation_id": conversation_id,
             "answer": text,
-            "sources": sources,
+            "sources": [_clean_source(s) for s in sources],
             "warnings": warnings,
             "model": model,
         }

@@ -53,6 +53,9 @@ export interface SceneDetail extends Scene {
   characters: string[]
   character_ids: string[]
   observations: Observation[]
+  scene_summary?: string | null
+  visual_description?: string | null
+  speakers?: string[]
 }
 
 export interface SceneMatch extends Scene {

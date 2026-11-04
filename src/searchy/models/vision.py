@@ -15,8 +15,7 @@ from urllib.parse import quote
 import httpx
 from pydantic import Field, ValidationError
 
-from searchy.core.config import Settings
-from searchy.core.errors import SearchyError
+from searchy.core import SearchyError, Settings
 from searchy.domain import Dialogue, Frame, Observation, ObservationKind, Provenance, Record
 
 
@@ -239,7 +238,8 @@ class RestVision(ABC):
             f"Allowed character names: {json.dumps(names)}. "
             f"Allowed registered identities: {json.dumps(identities)}. "
             f"Scene interval: [{start}, {end}] absolute seconds. "
-            f"Dialogue context: {json.dumps([d.text for d in dialogue])}. "
+            "Dialogue and speaker identity are stored from transcript evidence separately; "
+            "do not use or infer either from the frames. "
             f"Schema: {json.dumps(VisualAnalysis.model_json_schema())}"
         )
         try:

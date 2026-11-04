@@ -5,11 +5,10 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import Field, field_validator
 
-from searchy.api.exploration import GraphResponse, GraphSupport
-from searchy.api.schemas import SearchRequest, SearchResponse
-from searchy.core.config import Settings
+from searchy.core import Settings
 from searchy.domain import Record
-from searchy.services.answers import AnswerService
+from .exploration import GraphResponse, GraphSupport
+from .schemas import SearchRequest, SearchResponse
 
 
 class AnswerRequest(Record):
@@ -130,6 +129,7 @@ def _frame(event: str, payload: dict) -> bytes:
 
 
 def create_answers_router(settings: Settings, services, authorize) -> APIRouter:
+    from searchy.services import AnswerService
     router = APIRouter(prefix="/api", dependencies=[Depends(authorize)])
 
     def service(svc) -> AnswerService:

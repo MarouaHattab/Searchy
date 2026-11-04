@@ -23,12 +23,16 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: SecretStr = SecretStr("")
     qdrant_collection_name: str = "searchy_scenes"
-    llm_provider: Literal["GOOGLE_GENAI", "GROQ"] = "GOOGLE_GENAI"
+    qdrant_episode_collection_name: str = "searchy_episodes"
+    llm_provider: Literal["GOOGLE_GENAI", "GROQ", "NVIDIA_NIM"] = "GOOGLE_GENAI"
     llm_model_id: str = "gemini-3.5-flash-lite"
     caption_provider: Literal["GOOGLE_GENAI", "GROQ"] = "GOOGLE_GENAI"
     caption_api_model_id: str = ""
     gemini_api_key: SecretStr = SecretStr("")
     groq_api_key: SecretStr = SecretStr("")
+    nvidia_nim_api_key: SecretStr = SecretStr("")
+    nvidia_nim_base_url: str = "https://integrate.api.nvidia.com/v1"
+    nvidia_nim_model: str = "nvidia/nemotron-3.5-bolt-e4b"
     embedding_provider: Literal["LOCAL_EMBEDDING"] = "LOCAL_EMBEDDING"
     embedding_model_id: str = "google/embeddinggemma-300m"
     embedding_device: str = "cpu"
@@ -54,7 +58,7 @@ class Settings(BaseSettings):
     vlm_identity_min_confidence: float = Field(default=0.85, ge=0, le=1)
     chat_model: str = "gemma3:1b"
     chat_context: int = Field(default=8192, ge=1024)
-    chat_max_tokens: int = Field(default=700, ge=64)
+    chat_max_tokens: int = Field(default=1500, ge=64)
     chat_temperature: float = Field(default=0.2, ge=0, le=2)
     chat_source_limit: int = Field(default=20, ge=1, le=40)
     worker_enabled: bool = True
@@ -62,7 +66,7 @@ class Settings(BaseSettings):
     worker_shutdown_timeout_seconds: float = Field(default=10, gt=0)
     job_lease_seconds: int = Field(default=120, ge=30)
     candidate_limit: int = Field(default=80, ge=10, le=500)
-    semantic_min_score: float = Field(default=0.45, ge=-1, le=1)
+    semantic_min_score: float = Field(default=0.32, ge=-1, le=1)
     visual_min_score: float = Field(default=0.23, ge=-1, le=1)
     api_key: SecretStr = SecretStr("")
     cors_origins: list[str] = ["http://127.0.0.1:5173", "http://localhost:5173"]

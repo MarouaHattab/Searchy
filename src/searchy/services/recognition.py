@@ -5,11 +5,10 @@ import time
 from pathlib import Path
 
 from searchy.api.schemas import public_job
-from searchy.core.errors import InvalidInput, SearchyError
+from searchy.core import InvalidInput, SearchyError
 from searchy.domain import Observation, Provenance, Scene, stable_id
-from searchy.models.faces import OpenCVFaces
-from searchy.models.vision import IdentityReference, get_vision_provider
-from searchy.processing.video import VideoProcessor
+from searchy.models import IdentityReference, OpenCVFaces, get_vision_provider
+from searchy.processing import VideoProcessor
 
 
 class RecognitionService:

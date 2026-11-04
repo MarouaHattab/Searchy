@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
-from searchy.domain import Scene, Video
+from searchy.domain import EpisodeSummary, Scene, Video
 
 
 class MetadataStore:
@@ -25,6 +25,13 @@ class MetadataStore:
                 );
                 CREATE INDEX IF NOT EXISTS scene_video ON scenes(video_id);
                 CREATE INDEX IF NOT EXISTS scene_collection ON scenes(collection_id);
+                CREATE TABLE IF NOT EXISTS episode_summaries (
+                    episode_id TEXT PRIMARY KEY, collection_id TEXT NOT NULL, title TEXT NOT NULL,
+                    season_number INTEGER NOT NULL, episode_number INTEGER NOT NULL,
+                    macro_summary TEXT NOT NULL, events TEXT NOT NULL, created_at REAL NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS ep_summary_col ON episode_summaries(collection_id);
+
                 CREATE TABLE IF NOT EXISTS jobs (
                     job_id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'queued', progress REAL NOT NULL DEFAULT 0,
@@ -150,7 +157,7 @@ class MetadataStore:
                 "SELECT data FROM scenes WHERE indexed=1 AND index_signature=? AND (? IS NULL OR collection_id=?)",
                 (self.index_signature, collection_id, collection_id),
             ).fetchall()
-        return sorted({c for r in rows for c in Scene.model_validate_json(r[0]).characters})
+        return sorted({c for r in rows for c in Scene.model_validate_json(r[0]).related_characters})
 
     def catalog_records(self) -> tuple[list[Video], list[tuple[Scene, bool]], list[dict]]:
         with self.connect() as db:
@@ -270,3 +277,70 @@ class MetadataStore:
                 (*values.values(), job_id, owner),
             )
             return updated.rowcount == 1
+
+    def save_episode_summary(self, summary: EpisodeSummary):
+        with self.connect() as db:
+            db.execute(
+                """INSERT INTO episode_summaries(episode_id, collection_id, title, season_number, episode_number, macro_summary, events, created_at)
+                   VALUES(?,?,?,?,?,?,?,?)
+                   ON CONFLICT(episode_id) DO UPDATE SET
+                       collection_id=excluded.collection_id,
+                       title=excluded.title,
+                       season_number=excluded.season_number,
+                       episode_number=excluded.episode_number,
+                       macro_summary=excluded.macro_summary,
+                       events=excluded.events,
+                       created_at=excluded.created_at""",
+                (
+                    summary.episode_id,
+                    summary.collection_id,
+                    summary.title,
+                    summary.season_number,
+                    summary.episode_number,
+                    summary.macro_summary,
+                    json.dumps([e.model_dump() for e in summary.events]),
+                    time.time(),
+                ),
+            )
+
+    def get_episode_summary(self, episode_id: str, collection_id: str | None = None) -> EpisodeSummary | None:
+        with self.connect() as db:
+            query = "SELECT * FROM episode_summaries WHERE episode_id = ?"
+            params = [episode_id]
+            if collection_id is not None:
+                query += " AND collection_id = ?"
+                params.append(collection_id)
+            row = db.execute(query, params).fetchone()
+            if not row:
+                return None
+            return EpisodeSummary(
+                episode_id=row["episode_id"],
+                collection_id=row["collection_id"],
+                title=row["title"],
+                season_number=row["season_number"],
+                episode_number=row["episode_number"],
+                macro_summary=row["macro_summary"],
+                events=json.loads(row["events"]),
+            )
+
+    def list_episode_summaries(self, collection_id: str | None = None) -> list[EpisodeSummary]:
+        with self.connect() as db:
+            query = "SELECT * FROM episode_summaries"
+            params = []
+            if collection_id is not None:
+                query += " WHERE collection_id = ?"
+                params.append(collection_id)
+            query += " ORDER BY episode_number"
+            rows = db.execute(query, params).fetchall()
+            return [
+                EpisodeSummary(
+                    episode_id=r["episode_id"],
+                    collection_id=r["collection_id"],
+                    title=r["title"],
+                    season_number=r["season_number"],
+                    episode_number=r["episode_number"],
+                    macro_summary=r["macro_summary"],
+                    events=json.loads(r["events"]),
+                )
+                for r in rows
+            ]

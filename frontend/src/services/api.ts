@@ -310,6 +310,7 @@ export interface ChatSource {
   timestamp_basis: string
   available: boolean
   snippet: string
+  description?: string | null
 }
 
 export interface ChatReply {

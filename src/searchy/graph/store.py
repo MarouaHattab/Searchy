@@ -4,8 +4,7 @@ from typing import Any
 
 from neo4j import GraphDatabase
 
-from searchy.core.config import Settings
-from searchy.core.errors import InvalidInput, SearchyError
+from searchy.core import InvalidInput, SearchyError, Settings
 from searchy.domain import Candidate, ObservationKind, Scene, Video, stable_id
 
 _SCHEMA = (
@@ -19,6 +18,7 @@ _SCHEMA = (
     "CREATE CONSTRAINT searchy_action_key IF NOT EXISTS FOR (n:Action) REQUIRE n.key IS UNIQUE",
     "CREATE CONSTRAINT searchy_object_key IF NOT EXISTS FOR (n:Object) REQUIRE n.key IS UNIQUE",
     "CREATE CONSTRAINT searchy_location_key IF NOT EXISTS FOR (n:Location) REQUIRE n.key IS UNIQUE",
+    "CREATE CONSTRAINT searchy_profession_key IF NOT EXISTS FOR (n:Profession) REQUIRE n.key IS UNIQUE",
 )
 
 _UPSERT_BASE = """
@@ -82,7 +82,6 @@ UNWIND $rows AS row
 MATCH (s:Scene {scene_id: row.scene_id}), (o:Observation {observation_id: row.observation_id})
 MERGE (c:Character {key: row.key}) SET c.name = row.name, c.normalized = row.normalized
 MERGE (o)-[:SUBJECT]->(c)
-MERGE (c)-[:APPEARS_IN]->(s)
 """
 
 _CLOTHING = """
@@ -115,6 +114,13 @@ MERGE (o)-[:DESCRIBES]->(n)
 MERGE (s)-[:OCCURS_AT]->(n)
 """
 
+_PROFESSION = """
+UNWIND $rows AS row
+MATCH (o:Observation {observation_id: row.observation_id})
+MERGE (n:Profession {key: row.key}) SET n.name = row.name
+MERGE (o)-[:DESCRIBES]->(n)
+"""
+
 _UPSERT_DIALOGUE = """
 UNWIND $rows AS row
 MATCH (s:Scene {scene_id: row.scene_id})
@@ -126,7 +132,24 @@ _SPEAKER = """
 UNWIND $rows AS row
 MATCH (d:Dialogue {dialogue_id: row.dialogue_id})
 MERGE (c:Character {key: row.key}) SET c.name = row.name, c.normalized = row.normalized
-MERGE (d)-[:SPOKEN_BY]->(c)
+MERGE (d)-[r:SPOKEN_BY]->(c)
+SET r.confidence = row.confidence
+"""
+
+_MENTIONS = """
+UNWIND $rows AS row
+MATCH (d:Dialogue {dialogue_id: row.dialogue_id})
+MERGE (c:Character {key: row.key}) SET c.name = row.name, c.normalized = row.normalized
+MERGE (d)-[r:MENTIONS]->(c)
+SET r.confidence = row.confidence, r.evidence = row.evidence
+"""
+
+_ABOUT = """
+UNWIND $rows AS row
+MATCH (d:Dialogue {dialogue_id: row.dialogue_id})
+MERGE (c:Character {key: row.key}) SET c.name = row.name, c.normalized = row.normalized
+MERGE (d)-[r:ABOUT]->(c)
+SET r.confidence = row.confidence, r.evidence = row.evidence
 """
 
 _SEARCH = """
@@ -143,12 +166,15 @@ WHERE ($collection_id IS NULL OR s.collection_id = $collection_id)
       }))
   AND all(identifier IN $character_ids WHERE
       EXISTS { MATCH (:Character {key: identifier})-[:APPEARS_IN]->(s) }
-      OR EXISTS { MATCH (s)-[:HAS_DIALOGUE]->(:Dialogue)-[:SPOKEN_BY]->(:Character {key: identifier}) })
+      OR EXISTS { MATCH (s)-[:HAS_OBSERVATION]->(:Observation)-[:SUBJECT]->(:Character {key: identifier}) }
+      OR EXISTS { MATCH (s)-[:HAS_DIALOGUE]->(:Dialogue)-[:SPOKEN_BY|MENTIONS|ABOUT]->(:Character {key: identifier}) })
 OPTIONAL MATCH (c:Character)-[:APPEARS_IN]->(s)
 WITH s, collect(DISTINCT c.normalized) AS visible_characters
 OPTIONAL MATCH (s)-[:HAS_DIALOGUE]->(:Dialogue)-[:SPOKEN_BY]->(speaker:Character)
 WITH s, visible_characters, collect(DISTINCT speaker.normalized) AS speaking_characters
-WITH s, visible_characters + speaking_characters AS characters
+OPTIONAL MATCH (s)-[:HAS_DIALOGUE]->(:Dialogue)-[:MENTIONS|ABOUT]->(referenced:Character)
+WITH s, visible_characters, speaking_characters, collect(DISTINCT referenced.normalized) AS referenced_characters
+WITH s, visible_characters + speaking_characters + referenced_characters AS characters
 WHERE all(name IN $characters WHERE
     any(actual IN characters WHERE actual = name OR actual STARTS WITH name + ' '))
 OPTIONAL MATCH (s)-[:HAS_OBSERVATION]->(o:Observation)
@@ -191,7 +217,8 @@ WITH s, observations, dialogue, character_entities, focused_entities,
     END AS raw_score
 RETURN s.scene_id AS scene_id,
     CASE WHEN raw_score > 1.0 THEN 1.0 ELSE raw_score END AS score,
-    CASE WHEN s.description <> '' THEN [s.description] ELSE [] END + observations + dialogue AS evidence
+    CASE WHEN s.description <> '' AND NOT toUpper(s.description) CONTAINS 'DIALOGUE CONTEXT'
+        THEN [s.description] ELSE [] END + observations + dialogue AS evidence
 ORDER BY score DESC, character_entities DESC, focused_entities DESC, s.scene_id
 LIMIT $limit
 """
@@ -214,9 +241,21 @@ CALL (s) {
     MATCH (s)-[:HAS_DIALOGUE]->(:Dialogue)-[:SPOKEN_BY]->(c:Character)
     RETURN collect(DISTINCT c.name) AS speaking
 }
+CALL (s) {
+    MATCH (s)-[:HAS_DIALOGUE]->(:Dialogue)-[:MENTIONS]->(c:Character)
+    RETURN collect(DISTINCT c.name) AS mentioned
+}
+CALL (s) {
+    MATCH (s)-[:HAS_DIALOGUE]->(:Dialogue)-[:ABOUT]->(c:Character)
+    RETURN collect(DISTINCT c.name) AS about
+}
 RETURN s.scene_id AS scene_id,
     entities,
-    appearing + speaking AS characters
+    appearing AS visual_characters,
+    speaking AS speakers,
+    mentioned AS mentioned_characters,
+    about AS subject_characters,
+    appearing + speaking + mentioned + about AS characters
 """
 
 _ENTITY_QUERIES = {
@@ -225,6 +264,7 @@ _ENTITY_QUERIES = {
     ObservationKind.INTERACTION: _ACTION,
     ObservationKind.OBJECT: _OBJECT,
     ObservationKind.LOCATION: _LOCATION,
+    ObservationKind.PROFESSION: _PROFESSION,
 }
 
 _STOPWORDS = frozenset(
@@ -403,6 +443,8 @@ class GraphStore:
                 _SUBJECT,
                 _UPSERT_DIALOGUE,
                 _SPEAKER,
+                _MENTIONS,
+                _ABOUT,
             )
         }
         for scene in scenes:
@@ -422,8 +464,10 @@ class GraphStore:
                 "start": scene.start,
                 "end": scene.end,
                 "timestamp_basis": scene.timestamp_basis,
-                "description": scene.description,
-                "character_ids": scene.character_ids,
+                "description": scene.visual_text,
+                "visual_description": scene.visual_text,
+                "scene_summary": scene.scene_summary,
+                "character_ids": scene.related_character_ids,
                 "terms": _tokens(scene.search_text()),
                 "provenance_json": json.dumps([p.model_dump() for p in scene.provenance]),
             }
@@ -478,6 +522,7 @@ class GraphStore:
                     ObservationKind.CLOTHING,
                     ObservationKind.ACTION,
                     ObservationKind.INTERACTION,
+                    ObservationKind.PROFESSION,
                 ):
                     parameters = self._character_parameters(
                         scene, observation.subject, observation.subject_id
@@ -486,7 +531,7 @@ class GraphStore:
                         groups[_SUBJECT].append({**identifiers, **parameters})
             for index, dialogue in enumerate(scene.dialogue):
                 dialogue_id = stable_id(f"dialogue:{scene.scene_id}:{index}")
-                values = dialogue.model_dump(exclude={"provenance"})
+                values = dialogue.model_dump(exclude={"provenance", "references"})
                 if dialogue.provenance:
                     values.update(dialogue.provenance.model_dump())
                 values.update(dialogue_id=dialogue_id, scene_id=scene.scene_id)
@@ -502,7 +547,28 @@ class GraphStore:
                         scene, dialogue.speaker, dialogue.speaker_id
                     )
                     if parameters["key"]:
-                        groups[_SPEAKER].append({"dialogue_id": dialogue_id, **parameters})
+                        groups[_SPEAKER].append(
+                            {
+                                "dialogue_id": dialogue_id,
+                                **parameters,
+                                "confidence": dialogue.speaker_confidence,
+                            }
+                        )
+                for reference in dialogue.references:
+                    parameters = self._character_parameters(
+                        scene, reference.name, reference.character_id
+                    )
+                    if not parameters["key"]:
+                        continue
+                    query = _MENTIONS if reference.relation == "mentioned" else _ABOUT
+                    groups[query].append(
+                        {
+                            "dialogue_id": dialogue_id,
+                            **parameters,
+                            "confidence": reference.confidence,
+                            "evidence": reference.evidence,
+                        }
+                    )
 
         def replace(tx):
             tx.run(_UPSERT_BASE, rows=base_rows).consume()

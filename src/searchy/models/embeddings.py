@@ -3,8 +3,7 @@ from pathlib import Path
 from threading import Lock
 from typing import Any
 
-from searchy.core.config import Settings
-from searchy.core.errors import SearchyError
+from searchy.core import SearchyError, Settings
 
 
 class LocalEmbeddings:

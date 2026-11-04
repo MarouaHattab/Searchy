@@ -3,7 +3,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends
 from pydantic import Field, field_validator, model_validator
 
-from searchy.core.config import Settings
+from searchy.core import Settings
 from searchy.domain import Record
 
 GraphNodeType = Literal[

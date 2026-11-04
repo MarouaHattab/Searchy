@@ -10,11 +10,11 @@ from searchy.api.schemas import (
     WorkspaceResponse,
     public_job,
 )
-from searchy.core.config import Settings
+from searchy.core import Settings
 from searchy.domain import ObservationKind, Scene, Video, stable_id
-from searchy.retrieval.search import scene_view
-from searchy.services.characters import CharacterService
-from searchy.storage.metadata import MetadataStore
+from searchy.retrieval import scene_view
+from searchy.storage import MetadataStore
+from .characters import CharacterService
 
 
 class CatalogService:
@@ -226,7 +226,7 @@ class CatalogService:
             appearances = [
                 scene
                 for scene, indexed in scenes
-                if indexed and character["id"] in getattr(scene, "character_ids", [])
+                if indexed and character["id"] in getattr(scene, "visual_character_ids", [])
             ]
             verified = sum(
                 any(

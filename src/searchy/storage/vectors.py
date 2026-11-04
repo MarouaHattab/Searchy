@@ -6,9 +6,8 @@ from typing import Any
 import httpx
 from qdrant_client import QdrantClient, models
 
-from searchy.core.config import Settings
-from searchy.core.errors import SearchyError
-from searchy.domain import Candidate, Scene, stable_id
+from searchy.core import SearchyError, Settings
+from searchy.domain import Candidate, EpisodeSummary, Scene, stable_id
 
 
 def _name(kind: str, identity: str) -> str:
@@ -123,7 +122,21 @@ class VectorStore:
             info = self.client.get_collection(self.settings.qdrant_collection_name)
             self._validate_collection(info, dimensions)
             if not self._indexes_created:
-                for field in ("scene_id", "collection_id", "character_ids"):
+                for field in (
+                    "scene_id",
+                    "collection_id",
+                    "episode_id",
+                    "character_ids",
+                    "visual_characters",
+                    "visual_character_ids",
+                    "speaker_ids",
+                    "mentioned_character_ids",
+                    "subject_character_ids",
+                    "speaker_id",
+                    "mentioned_characters",
+                    "subject_characters",
+                    "kind",
+                ):
                     if field not in info.payload_schema:
                         self.client.create_payload_index(
                             collection_name=self.settings.qdrant_collection_name,
@@ -175,36 +188,36 @@ class VectorStore:
                 documents = []
                 for scene in batch:
                     narrative = scene.model_copy(update={"dialogue": []}).search_text()
-                    dialogue = "\n".join(
-                        f"{item.speaker}: {item.text}" if item.speaker else item.text
-                        for item in scene.dialogue
-                    )
-                    if not narrative and not dialogue:
+                    if not narrative and not scene.dialogue:
                         raise SearchyError(
                             "A scene has no searchable description, observations or dialogue"
                         )
-                    for index, text in enumerate(_windows(narrative or dialogue)):
+                    for index, text in enumerate(_windows(narrative)):
                         point_id = (
                             scene.scene_id
                             if index == 0
                             else stable_id(f"{scene.scene_id}:text:{index}")
                         )
-                        documents.append((scene, point_id, "text", text))
-                    if narrative:
-                        for index, text in enumerate(_windows(dialogue)):
-                            identity = (
-                                f"{scene.scene_id}:dialogue"
-                                if index == 0
-                                else f"{scene.scene_id}:dialogue:{index}"
+                        documents.append((scene, point_id, "text", text, None))
+                    for index, line in enumerate(scene.dialogue):
+                        content = f"{line.speaker or 'UNKNOWN'}: {line.text}"
+                        for window_index, text in enumerate(_windows(content)):
+                            point_id = (
+                                scene.scene_id
+                                if not narrative and index == 0 and window_index == 0
+                                else stable_id(
+                                    f"{scene.scene_id}:dialogue:{index}:{window_index}:"
+                                    f"{line.start:.3f}:{line.end:.3f}:{line.text}"
+                                )
                             )
-                            documents.append((scene, stable_id(identity), "dialogue", text))
-                texts = [text for _, _, _, text in documents]
+                            documents.append((scene, point_id, "dialogue", text, line))
+                texts = [text for _, _, _, text, _ in documents]
                 embeddings = self.embeddings.embed_documents(texts)
                 self._validate_vectors(
                     embeddings, len(documents), self._dimensions[self.text_vector_name]
                 )
                 points = []
-                for (scene, point_id, kind, text), embedding in zip(
+                for (scene, point_id, kind, text, line), embedding in zip(
                     documents, embeddings, strict=True
                 ):
                     vectors = {self.text_vector_name: embedding}
@@ -221,10 +234,46 @@ class VectorStore:
                                 "scene_id": scene.scene_id,
                                 "video_id": scene.video_id,
                                 "collection_id": scene.collection_id,
-                                "character_ids": scene.character_ids,
+                                "character_ids": scene.related_character_ids,
+                                "visual_character_ids": scene.visual_character_ids,
+                                "speaker_ids": scene.speaker_ids,
+                                "mentioned_character_ids": scene.mentioned_character_ids,
+                                "subject_character_ids": scene.subject_character_ids,
                                 "episode_id": scene.episode_id,
-                                "start": scene.start,
-                                "end": scene.end,
+                                "start": line.start if line else scene.start,
+                                "end": line.end if line else scene.end,
+                                "start_timestamp": line.start if line else scene.start,
+                                "end_timestamp": line.end if line else scene.end,
+                                "source_start": line.source_start if line else None,
+                                "source_end": line.source_end if line else None,
+                                "visual_characters": scene.visual_characters,
+                                "speaker_id": line.speaker_id if line else None,
+                                "speaker_name": (line.speaker or "UNKNOWN") if line else None,
+                                "speaker_confidence": line.speaker_confidence if line else None,
+                                "transcript": line.text if line else None,
+                                "mentioned_characters": [
+                                    reference.name
+                                    for reference in line.references
+                                    if reference.relation == "mentioned"
+                                ]
+                                if line
+                                else [],
+                                "subject_characters": [
+                                    reference.name
+                                    for reference in line.references
+                                    if reference.relation == "subject"
+                                ]
+                                if line
+                                else [],
+                                "visual_description": scene.visual_text[:2000],
+                                "scene_summary": scene.scene_summary,
+                                "evidence_source": (
+                                    line.provenance.source
+                                    if line and line.provenance
+                                    else "transcript"
+                                    if line
+                                    else "visual_caption"
+                                ),
                                 "text": text,
                                 "kind": kind,
                             },
@@ -358,3 +407,87 @@ class VectorStore:
             return present
         except Exception:
             raise SearchyError("Qdrant could not verify indexed scene records") from None
+
+    def ensure_episode_collection(self) -> None:
+        col_name = getattr(self.settings, "qdrant_episode_collection_name", "searchy_episodes")
+        try:
+            if not self.client.collection_exists(col_name):
+                self.client.create_collection(
+                    col_name,
+                    vectors_config=models.VectorParams(
+                        size=self.embeddings.dimension,
+                        distance=models.Distance.COSINE,
+                    ),
+                )
+        except Exception as exc:
+            raise SearchyError(f"Failed to ensure episode collection: {exc}") from None
+
+    def index_episodes(self, summaries: list[EpisodeSummary]) -> None:
+        if not summaries:
+            return
+        self.ensure_episode_collection()
+        col_name = getattr(self.settings, "qdrant_episode_collection_name", "searchy_episodes")
+        texts = [
+            f"{s.title}\n{s.macro_summary}\n" + "\n".join(e.description for e in s.events)
+            for s in summaries
+        ]
+        vectors = self.embeddings.embed_documents(texts)
+        points = []
+        for summary, vector in zip(summaries, vectors):
+            scene_ids = sorted({sid for e in summary.events for sid in e.supporting_scene_ids})
+            point_id = stable_id(f"episode:{summary.collection_id}:{summary.episode_id}")
+            points.append(
+                models.PointStruct(
+                    id=point_id,
+                    vector=vector,
+                    payload={
+                        "episode_id": summary.episode_id,
+                        "collection_id": summary.collection_id,
+                        "title": summary.title,
+                        "season_number": summary.season_number,
+                        "episode_number": summary.episode_number,
+                        "macro_summary": summary.macro_summary,
+                        "events": [e.model_dump() for e in summary.events],
+                        "supporting_scene_ids": scene_ids,
+                    },
+                )
+            )
+        self.client.upsert(collection_name=col_name, points=points, wait=True)
+
+    def search_episodes(
+        self, query: str, limit: int = 4, collection_id: str | None = None
+    ) -> list[dict]:
+        col_name = getattr(self.settings, "qdrant_episode_collection_name", "searchy_episodes")
+        try:
+            if not self.client.collection_exists(col_name):
+                return []
+            vector = self.embeddings.embed_query(query)
+            conditions = []
+            if collection_id is not None:
+                conditions.append(
+                    models.FieldCondition(
+                        key="collection_id", match=models.MatchValue(value=collection_id)
+                    )
+                )
+            query_filter = models.Filter(must=conditions) if conditions else None
+            points = self.client.query_points(
+                collection_name=col_name,
+                query=vector,
+                query_filter=query_filter,
+                limit=limit,
+                with_payload=True,
+                with_vectors=False,
+            ).points
+            return [
+                {
+                    "episode_id": p.payload.get("episode_id"),
+                    "title": p.payload.get("title"),
+                    "macro_summary": p.payload.get("macro_summary"),
+                    "events": p.payload.get("events", []),
+                    "supporting_scene_ids": p.payload.get("supporting_scene_ids", []),
+                    "score": p.score,
+                }
+                for p in points
+            ]
+        except Exception:
+            return []

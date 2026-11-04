@@ -1,14 +1,17 @@
-from searchy.core.config import Settings
+from searchy.core import Settings
 from searchy.domain import stable_id
-from searchy.graph.store import GraphStore
-from searchy.models.embeddings import LocalEmbeddings, VisualEmbeddings
-from searchy.retrieval.search import SearchEngine
-from searchy.services.characters import CharacterService
-from searchy.services.recognition import RecognitionService
-from searchy.storage.chat import ChatStore
-from searchy.storage.metadata import MetadataStore
-from searchy.storage.sessions import SearchSessions
-from searchy.storage.vectors import VectorStore
+from searchy.graph import GraphStore
+from searchy.models import LocalEmbeddings, VisualEmbeddings
+from searchy.retrieval import SearchEngine
+from searchy.storage import (
+    CharacterStore,
+    ChatStore,
+    MetadataStore,
+    SearchSessions,
+    VectorStore,
+)
+from .characters import CharacterService
+from .recognition import RecognitionService
 
 
 class Services:

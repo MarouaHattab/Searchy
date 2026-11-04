@@ -5,15 +5,13 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from searchy.core.config import Settings
-from searchy.core.errors import InvalidInput, SearchyError
+from searchy.core import InvalidInput, SearchyError, Settings
 
 SECTIONS = (
     "SCENE SETTING",
     "CHARACTERS PRESENT",
     "ACTIONS AND INTERACTIONS",
     "OBJECTS AND PROPS",
-    "DIALOGUE CONTEXT",
     "TEMPORAL NOTES",
 )
 
@@ -27,13 +25,13 @@ You will:
 2. **Describe the Setting**: Identify the location, time of day, and lighting conditions
 3. **Document Actions**: Record what each character is doing and how they interact
 4. **List Objects**: Note significant props, furniture, and items visible in the scene
-5. **Summarize Dialogue**: Use subtitles to understand the conversation topic and tone
+5. **Keep Attribution Separate**: Describe only what is visible; dialogue is indexed separately
 6. **Track Changes**: Note any temporal changes in position, action, or scene composition
 
 ### Rule 1: UNCERTAINTY PROTOCOL
 - If ANY detail is unclear/ambiguous, write 'unclear' or 'not visible'
 - NEVER guess clothing colors - use terms like 'dark colored', 'light colored', or 'unclear'
-- NEVER invent objects mentioned in subtitles but not visible in video
+- Never invent objects that are not clearly visible in the video
 - Confidence threshold: Only report details you're 80%+ certain about
 
 ### Rule 2: ZERO REDUNDANCY POLICY
@@ -50,11 +48,10 @@ You will:
 - NEVER duplicate character names in the same section
 - Verify the face match BEFORE writing the name
 
-### Rule 4: SUBTITLE-VISUAL SEPARATION
-- Subtitles tell what's SAID, not what's SEEN
-- If subtitles mention 'pizza' but you see sandwiches, describe sandwiches
-- If subtitles say someone is 'angry' but they're smiling, describe as smiling
-- Match dialogue to visible lip movements when possible
+### Rule 4: VISUAL EVIDENCE ONLY
+- Do not use transcript, audio, or subtitles to describe the video
+- Never infer who is speaking from who appears on screen, lip movement, or co-presence
+- Record visible presence and actions only; transcript segments are stored separately
 
 ### Rule 5: TEMPORAL CLARITY
 - Static actions (sitting, wearing outfit) go in main sections
@@ -79,7 +76,7 @@ Hair Description Rules:
 - Style: 'straight', 'curly', 'ponytail', 'loose'
 Expression Guidelines:
 - Use simple terms: 'smiling', 'serious', 'concerned', 'animated', 'relaxed'
-- Match to visible facial cues, not subtitle emotions
+- Match only to visible facial cues
 
 ### **ACTIONS AND INTERACTIONS:**
 Write as a brief NARRATIVE (3-5 sentences), NOT a repetitive list.
@@ -102,16 +99,7 @@ Guidelines:
 - List 3-8 items maximum (most prominent/relevant)
 - Skip background clutter unless significant
 - Use 'unclear' for ambiguous objects
-- Don't invent objects from subtitles
-
-### **DIALOGUE CONTEXT:**
-Based on subtitles + visual cues, describe in 2-4 sentences:
-
-Include:
-- Topic: What are they discussing? (use subtitles)
-- Participants: Who's speaking to whom? (use visuals)
-- Tone: happy, serious, joking, tense, casual (match facial expressions)
-- Reactions: Notable responses from listeners
+- Don't invent objects that are not visible
 
 ### **TEMPORAL NOTES:**
 ONLY include if actions/positions CHANGE during the clip.
@@ -142,13 +130,13 @@ Redundancy Elimination:
 
 Hallucination Prevention:
   - Removed any objects not actually visible
-  - Verified actions match what's shown, not just subtitles
+  - Verified actions match what is visible in the frames
 
 Temporal Accuracy:
   - Static info in main sections, changes ONLY in Temporal Notes
 
 Format Compliance:
-  - All six section headers included, in the order above
+  - All five section headers included, in the order above
   - Concise writing (quality > quantity)
 """
 
@@ -211,7 +199,7 @@ def collection_references(
     if not collection_id:
         return []
     try:
-        from searchy.storage.characters import CharacterStore
+        from searchy.storage import CharacterStore
 
         store = CharacterStore(settings.database_path)
         references: list[Reference] = []
@@ -293,7 +281,10 @@ def build_messages(
         {
             "type": "text",
             "text": (
-                f'## SUBTITLES (Context Only)\n"{subtitles_text}"\n\n' + INSTRUCTIONS
+                "## VISUAL-ONLY TASK\n"
+                "Transcript and audio are handled as separate evidence. Do not infer dialogue, "
+                "conversation subjects, or speaker identity from this video.\n\n"
+                + INSTRUCTIONS
             ),
         }
     )
@@ -405,7 +396,7 @@ class Captioner:
         return self._processor, self._model
 
     def _server_stills(self, video: Path, cache: Path) -> list[Path]:
-        from searchy.processing.video import VideoProcessor
+        from .video import VideoProcessor
 
         processor = VideoProcessor(self.settings)
         duration = processor.probe(video).duration
@@ -626,7 +617,7 @@ class ApiCaptioner:
         reference_dir: Path | None = DEFAULT_REFERENCE_DIR,
         frames: int = 3,
     ):
-        from searchy.models.vision import get_vision_provider
+        from searchy.models import get_vision_provider
 
         self.settings = settings
         self.references = load_references(reference_dir)
@@ -639,7 +630,7 @@ class ApiCaptioner:
         )
 
     def _sample_frames(self, video: Path, cache: Path) -> list[Path]:
-        from searchy.processing.video import VideoProcessor
+        from .video import VideoProcessor
 
         processor = VideoProcessor(self.settings)
         duration = processor.probe(video).duration

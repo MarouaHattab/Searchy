@@ -9,8 +9,8 @@ from searchy.api.exploration import (
     GraphResponse,
     GraphSupport,
 )
-from searchy.core.errors import InvalidInput, SearchyError
-from searchy.domain import stable_id
+from searchy.core import InvalidInput, SearchyError
+from searchy.domain import stable_id, visual_description
 from searchy.retrieval.search import normalized_terms
 
 _SEEDS = """
@@ -98,9 +98,9 @@ WHERE (requested.kind = 'Observation' AND item:Observation
     OR (requested.kind = 'Dialogue' AND item:Dialogue AND item.dialogue_id = requested.item_id)
 CALL {
     WITH s, item
-    MATCH (item)-[detail:DESCRIBES|SUBJECT|SPOKEN_BY]->(entity)
+    MATCH (item)-[detail:DESCRIBES|SUBJECT|SPOKEN_BY|MENTIONS|ABOUT]->(entity)
     WHERE ((item:Observation AND type(detail) IN ['DESCRIBES', 'SUBJECT'])
-        OR (item:Dialogue AND type(detail) = 'SPOKEN_BY'))
+        OR (item:Dialogue AND type(detail) IN ['SPOKEN_BY', 'MENTIONS', 'ABOUT']))
         AND any(label IN labels(entity) WHERE label IN $entity_labels)
     WITH s, detail, entity ORDER BY type(detail), entity.key LIMIT $detail_limit
     CALL {
@@ -133,6 +133,7 @@ _IDENTIFIERS = {
     "Action": "key",
     "Object": "key",
     "Location": "key",
+    "Profession": "key",
 }
 _PROPERTIES = {
     "Scene": {
@@ -145,6 +146,8 @@ _PROPERTIES = {
         "end",
         "timestamp_basis",
         "description",
+        "visual_description",
+        "scene_summary",
     },
     "Video": {"video_id", "collection_id", "title", "source_kind", "duration", "original_id"},
     "Episode": {"episode_id", "collection_id", "original_id"},
@@ -171,8 +174,11 @@ _PROPERTIES = {
         "text",
         "speaker",
         "speaker_id",
+        "speaker_confidence",
         "start",
         "end",
+        "source_start",
+        "source_end",
         "method",
         "model",
         "confidence",
@@ -181,7 +187,7 @@ _PROPERTIES = {
     },
     **{
         kind: {"key", "name", "normalized"}
-        for kind in ("Character", "Clothing", "Action", "Object", "Location")
+        for kind in ("Character", "Clothing", "Action", "Object", "Location", "Profession")
     },
 }
 _EDGE_TYPES = {
@@ -194,6 +200,8 @@ _EDGE_TYPES = {
     "OCCURS_AT",
     "APPEARS_IN",
     "SPOKEN_BY",
+    "MENTIONS",
+    "ABOUT",
 }
 _EDGE_EXPLANATIONS = {
     "PART_OF": "The stored hierarchy links this scene, episode, or video.",
@@ -205,6 +213,8 @@ _EDGE_EXPLANATIONS = {
     "OCCURS_AT": "The stored scene relationship associates this place with the scene.",
     "APPEARS_IN": "The stored scene relationship associates this person with the scene.",
     "SPOKEN_BY": "The transcript associates this dialogue segment with this speaker.",
+    "MENTIONS": "This dialogue segment explicitly mentions this character.",
+    "ABOUT": "This dialogue segment directly identifies this character as its subject.",
 }
 _ORDER = {kind: index for index, kind in enumerate(_IDENTIFIERS)}
 
@@ -272,6 +282,9 @@ class _Subgraph:
             if key in _PROPERTIES[kind]
             and (value is None or isinstance(value, (str, int, float, bool)))
         }
+        if kind == "Scene" and isinstance(safe.get("description"), str):
+            safe["description"] = visual_description(safe["description"])
+            safe["visual_description"] = safe["description"]
         source = safe.pop("source", None)
         source_chunk = safe.pop("source_chunk", None)
         source_reference = _source_reference(source)
@@ -497,7 +510,14 @@ class GraphExplorer:
                     _ENTITIES,
                     scenes=scenes,
                     evidence=evidence,
-                    entity_labels=["Character", "Clothing", "Action", "Object", "Location"],
+                    entity_labels=[
+                        "Character",
+                        "Clothing",
+                        "Action",
+                        "Object",
+                        "Location",
+                        "Profession",
+                    ],
                     detail_limit=3,
                     direct_limit=3,
                 ):

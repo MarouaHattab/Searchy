@@ -1,46 +1,66 @@
-from typing import TYPE_CHECKING
+from .core import InvalidInput, SearchyError, Settings
+from .domain import (
+    Candidate,
+    Dialogue,
+    EpisodeSummary,
+    Observation,
+    ObservationKind,
+    Provenance,
+    Record,
+    Scene,
+    SummaryEvent,
+    Video,
+    stable_id,
+)
 
-if TYPE_CHECKING:
-    from searchy.core.config import Settings as Settings
-    from searchy.core.errors import InvalidInput as InvalidInput
-    from searchy.core.errors import SearchyError as SearchyError
-    from searchy.domain import Candidate as Candidate
-    from searchy.domain import Dialogue as Dialogue
-    from searchy.domain import Observation as Observation
-    from searchy.domain import ObservationKind as ObservationKind
-    from searchy.domain import Provenance as Provenance
-    from searchy.domain import Scene as Scene
-    from searchy.domain import Video as Video
-    from searchy.domain import stable_id as stable_id
-
-_EXPORTS = {
-    "Settings": "searchy.core.config",
-    "SearchyError": "searchy.core.errors",
-    "InvalidInput": "searchy.core.errors",
-    "Scene": "searchy.domain",
-    "Video": "searchy.domain",
-    "Candidate": "searchy.domain",
-    "Dialogue": "searchy.domain",
-    "Observation": "searchy.domain",
-    "ObservationKind": "searchy.domain",
-    "Provenance": "searchy.domain",
-    "stable_id": "searchy.domain",
-}
-
-__all__ = list(_EXPORTS)
 __version__ = "0.1.0"
+
+__all__ = [
+    "Candidate",
+    "Dialogue",
+    "EpisodeSummary",
+    "InvalidInput",
+    "Observation",
+    "ObservationKind",
+    "Provenance",
+    "Record",
+    "Scene",
+    "SearchyError",
+    "Settings",
+    "SummaryEvent",
+    "Video",
+    "__version__",
+    "stable_id",
+]
+
+# Backward compatibility mapping for legacy imports from root package
+_COMPAT_EXPORTS = {
+    "AnswerService": "searchy.services",
+    "CharacterStore": "searchy.storage",
+    "ChatService": "searchy.services",
+    "ChatStore": "searchy.storage",
+    "ClaimVerificationResult": "searchy.models",
+    "ClaimVerifier": "searchy.models",
+    "EpisodeSummaryBuilder": "searchy.summaries",
+    "MetadataStore": "searchy.storage",
+    "SearchEngine": "searchy.retrieval",
+    "SearchSessions": "searchy.storage",
+    "Services": "searchy.services",
+    "SpeakerAligner": "searchy.ingestion",
+    "VectorStore": "searchy.storage",
+    "VideoProcessor": "searchy.processing",
+    "import_chunks": "searchy.ingestion",
+    "inspect_chunks": "searchy.ingestion",
+    "understand": "searchy.retrieval",
+}
 
 
 def __getattr__(name: str):
-    module = _EXPORTS.get(name)
-    if module is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    from importlib import import_module
+    if name in _COMPAT_EXPORTS:
+        from importlib import import_module
 
-    value = getattr(import_module(module), name)
-    globals()[name] = value
-    return value
-
-
-def __dir__():
-    return sorted([*globals(), *__all__])
+        target_mod = import_module(_COMPAT_EXPORTS[name])
+        val = getattr(target_mod, name)
+        globals()[name] = val
+        return val
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

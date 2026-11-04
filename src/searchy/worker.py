@@ -2,11 +2,11 @@ import argparse
 import logging
 import shutil
 import threading
+from collections import defaultdict
 from pathlib import Path
 from uuid import uuid4
 
-from searchy.core.config import Settings
-from searchy.core.errors import SearchyError
+from searchy.core import SearchyError, Settings
 from searchy.domain import (
     Media,
     Observation,
@@ -16,9 +16,9 @@ from searchy.domain import (
     Video,
     stable_id,
 )
-from searchy.ingestion.importer import import_chunks
-from searchy.processing.video import VideoProcessor
-from searchy.services.container import Services
+from searchy.ingestion import import_chunks
+from searchy.processing import VideoProcessor
+from searchy.services import Services
 
 logger = logging.getLogger("searchy.worker")
 
@@ -175,6 +175,25 @@ class Worker:
             character["id"]: character
             for character in registry.list(scene.collection_id, scene.video_id)
         }
+        registered_by_name = defaultdict(list)
+        for identifier, character in registered.items():
+            registered_by_name[" ".join(character["name"].casefold().split())].append(
+                (identifier, character["name"])
+            )
+
+        def registered_identity(name: str | None):
+            if not name:
+                return None
+            normalized = " ".join(name.casefold().split())
+            matches = registered_by_name.get(normalized, [])
+            if not matches and " " not in normalized:
+                matches = [
+                    identity
+                    for registered_name, identities in registered_by_name.items()
+                    if registered_name.split()[0] == normalized
+                    for identity in identities
+                ]
+            return matches[0] if len(matches) == 1 else None
 
         def evidence_key(observation: Observation) -> tuple:
             return (
@@ -293,11 +312,34 @@ class Worker:
             if retained not in scene.observations:
                 scene.observations.append(retained)
         for line in scene.dialogue:
+            speaker_identity = registered_identity(line.speaker)
+            if speaker_identity and line.speaker_id in {
+                None,
+                stable_id(
+                    f"character:{scene.collection_id}:"
+                    f"{' '.join(line.speaker.casefold().split())}"
+                ),
+                speaker_identity[0],
+            }:
+                line.speaker_id, line.speaker = speaker_identity[0], speaker_identity[1]
+            for reference in line.references:
+                reference_identity = registered_identity(reference.name)
+                if reference_identity:
+                    reference.character_id, reference.name = reference_identity
             candidates = [
                 old
                 for old in previous.dialogue
                 if old.speaker_id in registered
-                and (old.start, old.end, old.text) == (line.start, line.end, line.text)
+                and (
+                    old.source_start if old.source_start is not None else old.start,
+                    old.source_end if old.source_end is not None else old.end,
+                    old.text,
+                )
+                == (
+                    line.source_start if line.source_start is not None else line.start,
+                    line.source_end if line.source_end is not None else line.end,
+                    line.text,
+                )
             ]
             if len(candidates) == 1 and line.speaker_id in {None, candidates[0].speaker_id}:
                 old = candidates[0]

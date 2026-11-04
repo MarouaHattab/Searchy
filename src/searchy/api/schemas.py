@@ -45,11 +45,23 @@ class SceneDetail(Record):
     end: float | None
     timestamp_basis: str
     description: str
+    visual_description: str | None = None
+    scene_summary: str = ""
     dialogue: list[Dialogue]
     observations: list[Observation]
     provenance: list[Provenance]
     characters: list[str]
     character_ids: list[str] = Field(default_factory=list)
+    related_characters: list[str] = Field(default_factory=list)
+    related_character_ids: list[str] = Field(default_factory=list)
+    visual_characters: list[str] = Field(default_factory=list)
+    visual_character_ids: list[str] = Field(default_factory=list)
+    speakers: list[str] = Field(default_factory=list)
+    speaker_ids: list[str] = Field(default_factory=list)
+    mentioned_characters: list[str] = Field(default_factory=list)
+    mentioned_character_ids: list[str] = Field(default_factory=list)
+    subject_characters: list[str] = Field(default_factory=list)
+    subject_character_ids: list[str] = Field(default_factory=list)
     playback: Playback
 
 
@@ -62,6 +74,18 @@ class SceneMatch(Record):
     end: float | None
     timestamp_basis: str
     description: str
+    visual_description: str = ""
+    scene_summary: str = ""
+    visual_characters: list[str] = Field(default_factory=list)
+    visual_character_ids: list[str] = Field(default_factory=list)
+    speakers: list[str] = Field(default_factory=list)
+    speaker_ids: list[str] = Field(default_factory=list)
+    mentioned_characters: list[str] = Field(default_factory=list)
+    mentioned_character_ids: list[str] = Field(default_factory=list)
+    subject_characters: list[str] = Field(default_factory=list)
+    subject_character_ids: list[str] = Field(default_factory=list)
+    related_characters: list[str] = Field(default_factory=list)
+    related_character_ids: list[str] = Field(default_factory=list)
     matching_characters: list[str]
     matching_character_ids: list[str] = Field(default_factory=list)
     evidence_timestamps: list[float] = Field(default_factory=list)
