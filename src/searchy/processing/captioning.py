@@ -176,18 +176,22 @@ def chunk_folders(episode_path: Path) -> list[Path]:
     return sorted(folders, key=lambda path: int(path.name.split("_")[1]))
 
 
-def load_references(directory: Path | None, limit: int = 6) -> list[Reference]:
+def load_references(directory: Path | None, limit: int = 20) -> list[Reference]:
     if directory is None or not directory.is_dir():
         return []
     references = []
-    for path in sorted(directory.glob("*.png"))[:limit]:
+    supported_patterns = ("*.png", "*.jpg", "*.jpeg")
+    paths = []
+    for pattern in supported_patterns:
+        paths.extend(directory.glob(pattern))
+    for path in sorted(paths, key=lambda p: p.name.lower())[:limit]:
         if path.is_file() and not path.is_symlink() and path.stat().st_size:
             references.append(Reference(name=path.stem, path=path))
     return references
 
 
 def collection_references(
-    settings: Settings, collection_id: str | None, limit: int = 6
+    settings: Settings, collection_id: str | None, limit: int = 20
 ) -> list[Reference]:
     """Portraits registered for this collection only.
 
