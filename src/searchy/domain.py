@@ -36,6 +36,7 @@ class Dialogue(Record):
     text: str = Field(min_length=1)
     speaker: str | None = None
     speaker_id: str | None = None
+    speaker_name: str | None = None
     speaker_confidence: float | None = Field(default=None, ge=0, le=1)
     source_start: float | None = Field(default=None, ge=0)
     source_end: float | None = Field(default=None, gt=0)

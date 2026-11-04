@@ -116,6 +116,7 @@ class SearchResponse(Record):
     partial: bool
     shape: str = "lookup"
     aggregate: AggregateResult | None = None
+    episode_summaries: list[dict] = Field(default_factory=list)
 
 
 class JobResponse(Record):
