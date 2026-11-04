@@ -119,12 +119,6 @@ def inspect_chunks(root: Path) -> dict:
 
 
 def _caption(episode: Path, name: str, aggregate: dict, warnings: list[str]) -> tuple[str, Path]:
-    """Use the chunk's own structured caption.
-
-    ``all_captions.json`` is a fallback for a missing or unreadable chunk file.
-    A chunk file whose episode or chunk header disagrees with its directory is
-    left unused instead of being replaced by the aggregate.
-    """
     aggregate_source = episode / "all_captions.json"
     file_source = episode / name / "structured_caption.txt"
     item = aggregate.get(name)
@@ -437,8 +431,18 @@ def import_chunks(
             start: float | None = low
             end: float | None = high
             basis = "inferred_fixed_60_second_chunk"
-            if timing_provenance:
-                basis = "inferred_fixed_60_second_chunk_with_packet_aligned_media"
+            if timing_provenance and media is not None:
+                # A verified start_offset is the true position of this clip in
+                # the episode. Using the nominal 60s grid here would put every
+                # citation, crop and thumbnail off by the keyframe drift, which
+                # the shipped dataset measures at up to ~3 seconds.
+                start = media.start_offset
+                end = media.start_offset + (
+                    (low + media.duration - media.start_offset) - low
+                    if media.duration
+                    else (high - low)
+                )
+                basis = "verified_packet_aligned_chunk_offset"
             if name == names[-1]:
                 if media and media.duration:
                     end = low + media.duration - media.start_offset

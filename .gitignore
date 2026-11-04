@@ -21,3 +21,6 @@ dist/
 htmlcov/
 node_modules/
 *.tsbuildinfo
+
+# Local debugging scratch
+_probe/

@@ -378,6 +378,15 @@ class SearchEngine:
         graph_query = " ".join(sorted(plan.content_tokens))
         identity_filter = {"character_ids": character_ids} if character_ids else {}
         warnings = []
+        aggregate = None
+        if plan.shape in {"count", "superlative", "list"}:
+            # Aggregates are answered by a prepared statement, not by ranking.
+            try:
+                aggregate = self.graph.aggregate(
+                    plan.shape, plan.shape_target, self.settings.candidate_limit
+                )
+            except SearchyError as exc:
+                warnings.append(f"aggregate query unavailable: {exc}")
         if not any(
             c["indexed_scenes"]
             for c in self.metadata.collections()
@@ -664,4 +673,6 @@ class SearchEngine:
             warnings=warnings,
             channels=list(channels),
             partial=bool(errors) or any(result["missing_terms"] for result in selected),
+            aggregate=aggregate,
+            shape=plan.shape,
         )

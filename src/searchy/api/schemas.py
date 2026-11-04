@@ -75,6 +75,13 @@ class SceneMatch(Record):
     missing_terms: list[str] = Field(default_factory=list)
 
 
+class AggregateResult(Record):
+    shape: str
+    term: str | None = None
+    total: int = 0
+    rows: list[dict] = Field(default_factory=list)
+
+
 class SearchResponse(Record):
     search_id: str | None = None
     query_plan: dict = Field(default_factory=dict)
@@ -83,6 +90,8 @@ class SearchResponse(Record):
     warnings: list[str]
     channels: list[str]
     partial: bool
+    shape: str = "lookup"
+    aggregate: AggregateResult | None = None
 
 
 class JobResponse(Record):
@@ -109,7 +118,14 @@ def public_job(job: dict) -> dict:
     result["title"] = payload.get("title") or (
         f"Import {collection}" if job.get("kind") == "import" and collection else None
     )
-    if job.get("kind") == "upload" and collection and payload.get("digest"):
+    # An upload is imported through the chunk pipeline, so its video id is the
+    # importer's episode-derived id, not a digest-derived one. Report whatever
+    # the completed job actually created rather than reconstructing it.
+    created = (job.get("result") or {}) if isinstance(job.get("result"), dict) else {}
+    identifiers = created.get("video_ids") or []
+    if identifiers:
+        result["video_id"] = identifiers[0]
+    elif job.get("kind") == "upload" and collection and payload.get("digest"):
         result["video_id"] = stable_id(f"upload:{collection}:{payload['digest']}")
     return result
 

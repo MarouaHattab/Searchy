@@ -63,7 +63,22 @@ _VISUAL_CUES = re.compile(
     r"\b(show|find|picture|image|look like|see|visible|appears? in frame|close-up)\b", re.I
 )
 
-# Words that carry no retrieval constraint of their own. Declarative scaffolding only.
+# Question shapes that a ranked scene list cannot answer on its own. Each maps
+# to a fixed Cypher template with bound parameters, so no query text is ever
+# interpolated into Cypher.
+_COUNT_CUES = re.compile(
+    r"\b(how many|how often|how much|number of|count of|times did)\b", re.I
+)
+_SUPERLATIVE_CUES = re.compile(
+    r"\b(most|least|fewest|busiest|max|maximum|minimum|longest|shortest)\b", re.I
+)
+_LIST_CUES = re.compile(r"\b(list|which episodes|what episodes|all the|every)\b", re.I)
+# The noun an aggregate is about: "who smoked THE MOST" -> 'smoked' is dropped,
+# so take the content word nearest the superlative instead.
+_SUPERLATIVE_TARGET = re.compile(
+    r"\b(?:the\s+)?(most|least|fewest)\s+(\w+)", re.I
+)
+
 SCAFFOLDING_WORDS = {
     "why",
     "what",
@@ -121,6 +136,8 @@ class QueryUnderstanding:
     narrative: bool
     temporal: bool
     missing_constraints: tuple[str, ...]
+    shape: str = "lookup"
+    shape_target: str | None = None
 
     @property
     def primary_type(self) -> str:
@@ -132,7 +149,6 @@ class QueryUnderstanding:
 
 
 def garment_phrases(query: str) -> list[str]:
-    """Return contiguous modifier+garment phrases such as ``red dress`` or ``black leather jacket``."""
     found: list[str] = []
     current: list[str] = []
     for word in re.findall(r"[a-z0-9]+", query.lower()):
@@ -148,11 +164,6 @@ def garment_phrases(query: str) -> list[str]:
 
 
 def clothing_query(query: str) -> str:
-    """The part of the query the outfit matcher should read.
-
-    Behaviour is kept aligned with the search filter: a dialogue question only checks
-    clothing when the query explicitly mentions wearing something.
-    """
     stripped = _QUOTED.sub("", query)
     if _DIALOGUE_CUES.search(query.casefold()) and not _CLOTHING_CUES.search(stripped):
         return ""
@@ -163,12 +174,6 @@ def understand(
     query: str,
     requested_characters: list[str] | tuple[str, ...],
 ) -> QueryUnderstanding:
-    """Extract retrieval constraints and the question's intent.
-
-    This is deterministic and lexical on purpose: it runs on every keystroke-submitted
-    query and must be explainable. It is shared by search and answer generation so the
-    two cannot drift apart.
-    """
     lowered = query.casefold()
     quoted = tuple(match.strip() for match in _QUOTED.findall(query) if match.strip())
     characters = tuple(requested_characters)
@@ -219,6 +224,45 @@ def understand(
     elif _CAUSE_CUES.search(lowered):
         types.insert(0, "narrative")
 
+    _GENERIC = {
+        "character", "characters", "scene", "scenes", "episode", "episodes",
+        "video", "videos", "person", "people", "many", "much", "often", "most",
+        "least", "fewest", "times", "time", "number", "count", "someone", "somebody",
+        "have", "has", "had", "does", "did", "doing", "make", "makes", "made",
+        "show", "shows", "shown", "there", "with", "from", "this", "that",
+    }
+    # A count question is about WHAT appears, never about the act of appearing:
+    # "how many times did Gunther appear" counts Gunther, not the verb.
+    _ACTIVITY = {
+        "appear", "appears", "appeared", "appearing", "shown", "show",
+        "happen", "happens", "happened", "occur", "occurs", "occurred",
+        "mention", "mentions", "mentioned", "say", "says", "said",
+        "seen", "see", "sees", "visible", "feature", "features", "featured",
+    }
+
+    def _target() -> str | None:
+        # A registered character is the subject when the question names one.
+        if characters:
+            return characters[0]
+        ranked = [word for word in sorted(content_tokens) if word not in _GENERIC]
+        nouns = [word for word in ranked if word not in _ACTIVITY and not word.isdigit()]
+        if nouns:
+            return max(nouns, key=len)
+        return ranked[0] if ranked else None
+
+    shape, shape_target = "lookup", None
+    if _SUPERLATIVE_CUES.search(cue_text):
+        shape = "superlative"
+        match = _SUPERLATIVE_TARGET.search(cue_text)
+        candidate = match.group(2) if match else None
+        shape_target = candidate if candidate and candidate not in _GENERIC else _target()
+    elif _COUNT_CUES.search(cue_text):
+        shape = "count"
+        shape_target = _target()
+    elif _LIST_CUES.search(cue_text) and not quoted:
+        shape = "list"
+        shape_target = _target()
+
     hints: list[str] = []
     if dialogue_intent and not quoted:
         hints.append("a quoted line would pin the exact dialogue")
@@ -240,6 +284,8 @@ def understand(
         narrative=narrative,
         temporal=temporal,
         missing_constraints=tuple(hints),
+        shape=shape,
+        shape_target=shape_target,
     )
 
 

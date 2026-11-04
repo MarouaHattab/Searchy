@@ -1134,6 +1134,18 @@ a.character-chip:hover {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
 }
+.results-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.filter-toggle.answer-start {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+.filter-toggle.answer-start:hover {
+  background: var(--accent-soft);
+}
 .search-results > .notice {
   margin-bottom: 20px;
 }

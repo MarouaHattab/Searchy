@@ -19,6 +19,7 @@ class RecognitionService:
         self.registry = getattr(characters, "store", characters)
         self.graph = graph
         self.vectors = vectors
+        self.last_vlm_error: str | None = None
         detector = getattr(settings, "face_detector_path", None)
         recognizer = getattr(settings, "face_recognizer_path", None)
         self.faces = getattr(characters, "faces", None) or (
@@ -198,6 +199,25 @@ class RecognitionService:
         except (ValueError, TypeError):
             return None
 
+    def _candidates(
+        self, character: dict, scene: Scene, frame, others: list[dict], face_ready: bool
+    ) -> list[dict]:
+        """SFace when a reference has an embedding, the vision model otherwise.
+
+        The vision path costs a network call and can fail on its own (rate limit,
+        provider error, unusable response). That must not abort the whole job, so
+        it degrades to no candidate for this frame.
+        """
+        if face_ready:
+            return self._face_candidates(character, frame, others)
+        try:
+            return self._vlm_candidates(character, scene, frame, others)
+        except InvalidInput:
+            raise
+        except SearchyError as exc:
+            self.last_vlm_error = str(exc)
+            return []
+
     def _face_candidates(self, character: dict, frame, others: list[dict]) -> list[dict]:
         result = []
         threshold = getattr(self.settings, "face_match_threshold", 0.5)
@@ -257,7 +277,7 @@ class RecognitionService:
         if not any(reference.character_id == character["id"] for reference in references):
             raise InvalidInput("No usable character reference images are available")
         maximum = self.settings.vlm_max_images or (
-            3 if self.settings.llm_provider == "GROQ" else 10
+            3 if self.settings.caption_provider == "GROQ" else 10
         )
         own_references = [ref for ref in references if ref.character_id == character["id"]]
         peers_omitted = len(references) > maximum - 1 and any(
@@ -292,7 +312,12 @@ class RecognitionService:
             ):
                 ambiguous = True
                 break
-        provider = get_vision_provider(self.settings, references=references)
+        provider = get_vision_provider(
+            self.settings,
+            references=references,
+            provider=self.settings.caption_provider,
+            model_id=self.settings.caption_api_model_id or None,
+        )
         _, observations = provider.analyze([frame], [], scene.start, scene.end)
         candidates = [
             observation
@@ -305,7 +330,7 @@ class RecognitionService:
         return [
             {
                 "method": "vlm_reference_comparison",
-                "model_id": strongest.provenance.model or self.settings.llm_model_id,
+                "model_id": strongest.provenance.model or self.settings.caption_api_model_id,
                 "confidence": strongest.provenance.confidence or 0,
                 "qualified": not ambiguous
                 and not peers_omitted
@@ -343,8 +368,8 @@ class RecognitionService:
             "face_recognizer": file_hash(getattr(self.settings, "face_recognizer_path", None)),
             "face_threshold": getattr(self.settings, "face_match_threshold", 0.5),
             "face_margin": getattr(self.settings, "face_match_margin", 0.08),
-            "vlm_provider": self.settings.llm_provider,
-            "vlm_model": self.settings.llm_model_id,
+            "vlm_provider": self.settings.caption_provider,
+            "vlm_model": self.settings.caption_api_model_id,
             "vlm_images": self.settings.vlm_max_images,
             "vlm_threshold": getattr(self.settings, "vlm_identity_min_confidence", 0.85),
             "characters": [
@@ -422,14 +447,8 @@ class RecognitionService:
                         reference["validation"] == "face_ready" and self._embedding(reference)
                         for reference in character["references"]
                     )
-                    candidates = (
-                        []
-                        if reviewed
-                        else (
-                            self._face_candidates(character, frame, others)
-                            if face_ready
-                            else self._vlm_candidates(character, scene, frame, others)
-                        )
+                    candidates = [] if reviewed else self._candidates(
+                        character, scene, frame, others, face_ready
                     )
                     self._get(character_id, revision)
                     with self.registry.connect() as db:

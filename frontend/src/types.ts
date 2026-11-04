@@ -66,6 +66,13 @@ export interface SceneMatch extends Scene {
   missing_terms: string[]
 }
 
+export interface GraphAggregate {
+  shape: string
+  term: string | null
+  total: number
+  rows: { label?: string; total?: number; first_start?: number }[]
+}
+
 export interface SearchResponse {
   search_id: string
   query_plan: { primary_type: string; types: string[] }
@@ -74,6 +81,8 @@ export interface SearchResponse {
   warnings: string[]
   channels: string[]
   partial: boolean
+  shape?: string
+  aggregate?: GraphAggregate | null
 }
 
 export interface SearchAnswer {

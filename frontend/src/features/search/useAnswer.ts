@@ -16,7 +16,7 @@ export function answerQueryKey(body: AnswerRequest) {
   ]
 }
 
-export function useAnswer(body: AnswerRequest) {
+export function useAnswer(body: AnswerRequest, options?: { enabled?: boolean }) {
   const client = useQueryClient()
   const key = answerQueryKey(body)
   const signature = JSON.stringify(key)
@@ -41,7 +41,11 @@ export function useAnswer(body: AnswerRequest) {
         AbortSignal.any([signal, request.signal])
       )
     },
-    enabled: !!body.query && !!body.scene_ids.length && stopped !== signature,
+    enabled:
+      (options?.enabled ?? true) &&
+      !!body.query &&
+      !!body.scene_ids.length &&
+      stopped !== signature,
     retry: false,
     staleTime: Infinity,
     gcTime: 60 * 60_000,

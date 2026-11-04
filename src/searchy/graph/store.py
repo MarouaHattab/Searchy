@@ -237,8 +237,32 @@ was we were what when where which who will with would you your wearing wears out
 )
 
 
+_DECORATION = re.compile(r"[\[\](){}*_\"'`]+")
+_GENERIC_PERSON = re.compile(
+    r"\b(unidentified|unclear|unknown|unnamed|person|man|woman|someone|somebody|"
+    r"customer|barista|nurse|waiter|validation)\b",
+    re.I,
+)
+
+
 def _normalized(value: str) -> str:
     return " ".join(value.casefold().split())
+
+
+def character_key(value: str) -> str | None:
+    """Language-model decorations and placeholders are not character names.
+
+    Captions arrive as "[Monica Geller]", "Monica Geller:" or "unidentified
+    person (barista)". Keying on the raw text splits one person across several
+    Character nodes, which fragments APPEARS_IN and makes an identity query
+    miss. This reduces a label to the name it actually names, or None when it
+    names nobody in particular.
+    """
+    cleaned = _DECORATION.sub(" ", value)
+    cleaned = " ".join(cleaned.split()).strip(" :-,")
+    if not cleaned or _GENERIC_PERSON.search(cleaned):
+        return None
+    return _normalized(cleaned)
 
 
 def _tokens(value: str) -> list[str]:
@@ -257,6 +281,39 @@ def _variants(token: str) -> list[str]:
         root = token[:-1]
         forms.update({root, root + "ing", root + "ed"})
     return sorted(form for form in forms if len(form) >= 3) or [token]
+
+
+_AGGREGATE_QUERIES = {
+    # Who is associated with a term most often, counted per character name.
+    "superlative": """
+        MATCH (s:Scene)-[:HAS_OBSERVATION]->(o:Observation)
+        WHERE toLower(coalesce(o.value,'') + ' ' + coalesce(o.evidence,'')) CONTAINS $term
+        OPTIONAL MATCH (o)-[:SUBJECT|DESCRIBES]->(c:Character)
+        WITH coalesce(c.name, o.subject, 'unattributed') AS name, count(DISTINCT s) AS scenes
+        WHERE name <> 'unattributed'
+        RETURN name AS label, scenes AS total
+        ORDER BY total DESC, label
+        LIMIT $limit
+    """,
+    # How many distinct scenes mention a term.
+    "count": """
+        MATCH (s:Scene)-[:HAS_OBSERVATION]->(o:Observation)
+        WHERE toLower(coalesce(o.value,'') + ' ' + coalesce(o.evidence,'')) CONTAINS $term
+        WITH count(DISTINCT s) AS hits
+        RETURN hits AS total
+    """,
+    # Which episodes mention a term, with the timestamps that anchor each hit.
+    "list": """
+        MATCH (s:Scene)-[:HAS_OBSERVATION]->(o:Observation)
+        WHERE toLower(coalesce(o.value,'') + ' ' + coalesce(o.evidence,'')) CONTAINS $term
+        WITH DISTINCT s
+        RETURN coalesce(s.episode_id, s.video_id) AS label,
+               count(DISTINCT s) AS total,
+               min(s.start) AS first_start
+        ORDER BY total DESC, label
+        LIMIT $limit
+    """,
+}
 
 
 class GraphStore:
@@ -314,10 +371,15 @@ class GraphStore:
             ) from None
 
     def _character_parameters(self, scene: Scene, name: str, identifier: str | None = None) -> dict:
-        normalized = _normalized(name)
+        cleaned = character_key(name)
+        if identifier is None and cleaned is None:
+            # A placeholder is not an identity; leave it unattributed rather
+            # than creating an "Unidentified person" node per caption variant.
+            return {"key": None, "name": name.strip(), "normalized": _normalized(name)}
+        normalized = cleaned or _normalized(name)
         return {
             "key": identifier or stable_id(f"character:{scene.collection_id}:{normalized}"),
-            "name": name.strip(),
+            "name": normalized.title() if cleaned else name.strip(),
             "normalized": normalized,
         }
 
@@ -397,14 +459,11 @@ class GraphStore:
                 identifiers = {"scene_id": scene.scene_id, "observation_id": observation_id}
                 groups[_UPSERT_OBSERVATION].append({**identifiers, "properties": values})
                 if observation.kind == ObservationKind.CHARACTER:
-                    groups[_CHARACTER].append(
-                        {
-                            **identifiers,
-                            **self._character_parameters(
-                                scene, observation.value, observation.character_id
-                            ),
-                        }
+                    parameters = self._character_parameters(
+                        scene, observation.value, observation.character_id
                     )
+                    if parameters["key"]:
+                        groups[_CHARACTER].append({**identifiers, **parameters})
                 else:
                     groups[_ENTITY_QUERIES[observation.kind]].append(
                         {
@@ -420,14 +479,11 @@ class GraphStore:
                     ObservationKind.ACTION,
                     ObservationKind.INTERACTION,
                 ):
-                    groups[_SUBJECT].append(
-                        {
-                            **identifiers,
-                            **self._character_parameters(
-                                scene, observation.subject, observation.subject_id
-                            ),
-                        }
+                    parameters = self._character_parameters(
+                        scene, observation.subject, observation.subject_id
                     )
+                    if parameters["key"]:
+                        groups[_SUBJECT].append({**identifiers, **parameters})
             for index, dialogue in enumerate(scene.dialogue):
                 dialogue_id = stable_id(f"dialogue:{scene.scene_id}:{index}")
                 values = dialogue.model_dump(exclude={"provenance"})
@@ -442,14 +498,11 @@ class GraphStore:
                     }
                 )
                 if dialogue.speaker:
-                    groups[_SPEAKER].append(
-                        {
-                            "dialogue_id": dialogue_id,
-                            **self._character_parameters(
-                                scene, dialogue.speaker, dialogue.speaker_id
-                            ),
-                        }
+                    parameters = self._character_parameters(
+                        scene, dialogue.speaker, dialogue.speaker_id
                     )
+                    if parameters["key"]:
+                        groups[_SPEAKER].append({"dialogue_id": dialogue_id, **parameters})
 
         def replace(tx):
             tx.run(_UPSERT_BASE, rows=base_rows).consume()
@@ -523,11 +576,6 @@ class GraphStore:
             ) from None
 
     def context(self, scene_ids: list[str], collection_id: str | None = None) -> dict[str, dict]:
-        """Return the graph entities attached to each scene, for answer context.
-
-        Read-only. The caller is responsible for deciding whether the result proves
-        anything; this only reports which entity nodes the scene is linked to.
-        """
         if not scene_ids:
             return {}
 
@@ -561,10 +609,6 @@ class GraphStore:
             ) from None
 
     def timeline(self, scene_ids: list[str], collection_id=None) -> list[dict]:
-        """Closest earlier and later scenes in the same video.
-
-        Ordering uses indexed timestamps. It does not imply story chronology.
-        """
         if not scene_ids:
             return []
         query = """
@@ -651,6 +695,68 @@ class GraphStore:
             raise
         except Exception:
             raise SearchyError("Neo4j could not verify indexed scene records") from None
+
+    def aggregate(self, shape: str, term: str | None, limit: int = 20) -> dict:
+        """Answer an aggregate question with a fixed template.
+
+        A ranked scene list cannot answer "who did X the most" or "how many
+        scenes contain Y". Rather than let a model write Cypher at query time,
+        each shape maps to one prepared statement with every value bound as a
+        parameter, so the query text is never assembled from user input.
+        """
+        if shape not in _AGGREGATE_QUERIES:
+            raise InvalidInput(f"Unsupported aggregate shape {shape!r}")
+        if not term:
+            return {"shape": shape, "term": None, "rows": [], "total": 0}
+
+        def read(tx):
+            return [dict(record) for record in tx.run(_AGGREGATE_QUERIES[shape], term=term.lower(), limit=limit)]
+
+        try:
+            with self._connection().session(database=self.settings.neo4j_database) as session:
+                rows = session.execute_read(read)
+        except SearchyError:
+            raise
+        except Exception:
+            raise SearchyError("Neo4j aggregate query failed") from None
+        # For "list" each row is one episode, so the overall figure is the number
+        # of rows; taking row 0's per-episode count would report 1 for any list.
+        if shape == "list":
+            total = sum(int(row.get("total") or 0) for row in rows)
+        else:
+            total = int(rows[0]["total"]) if rows and "total" in rows[0] else len(rows)
+        return {"shape": shape, "term": term, "rows": rows, "total": total}
+
+    def where_is(self, character: str, limit: int = 12) -> list[dict]:
+        """Locations of the scenes a character appears in, most frequent first.
+
+        "Where does Monica work?" is a relation question, but retrieval scores
+        scenes by whether they contain "Monica", so every scene she is in ranks
+        equally. This walks the character's scenes to their locations, which is
+        what the question is actually asking for.
+        """
+        if not character:
+            return []
+        query = """
+            MATCH (c:Character)-[:APPEARS_IN]->(s:Scene)-[:OCCURS_AT]->(l:Location)
+            WHERE c.normalized = $character
+            WITH l.name AS location, count(DISTINCT s) AS scenes,
+                 min(s.start) AS first_start, collect(DISTINCT s.episode_id)[0..2] AS episodes
+            RETURN location, scenes, first_start, episodes
+            ORDER BY scenes DESC, location
+            LIMIT $limit
+        """
+
+        def read(tx):
+            return [dict(r) for r in tx.run(query, character=character.lower(), limit=limit)]
+
+        try:
+            with self._connection().session(database=self.settings.neo4j_database) as session:
+                return session.execute_read(read)
+        except SearchyError:
+            raise
+        except Exception:
+            raise SearchyError("Neo4j relation query failed") from None
 
     def close(self) -> None:
         if self._driver is not None:

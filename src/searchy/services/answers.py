@@ -251,7 +251,6 @@ class AnswerService:
                 )
             except SearchyError:
                 response["warnings"].append("Adjacent timeline evidence is unavailable.")
-        # The same evidence selection drives both the model context and the explorer.
         identifiers = []
         for item in response["evidence"]:
             parts = item["evidence_id"].rsplit(":", 2)
@@ -386,21 +385,53 @@ class AnswerService:
                 ],
             }
 
-        context = {
-            "scenes": blocks,
-            "evidence": response["evidence"],
-            "graph": compact_graph(selected_graph()),
-            "relationships": response["relationships"],
-            "grounded_links": grounded_links,
-            "limitations": response["warnings"],
-        }
+        full_graph = selected_graph()
+
+        def budget(graph=full_graph, relationships=None, links=None):
+            return {
+                "scenes": blocks,
+                "evidence": response["evidence"],
+                "graph": compact_graph(graph),
+                "relationships": response["relationships"]
+                if relationships is None
+                else relationships,
+                "grounded_links": grounded_links if links is None else links,
+                "limitations": response["warnings"],
+            }
+
+        context = budget()
+        trimmed = {"graph": False, "links": False, "evidence": 0}
+        # Graph context is the largest contributor and the cheapest to shrink:
+        # one dropped node is worth more than several evidence records, and the
+        # answer needs evidence to make any claim at all. Order matters, and it
+        # used to be inverted.
+        if len(json.dumps(context)) > MAX_CONTEXT_CHARS:
+            trimmed["graph"] = True
+            context = {
+                **context,
+                "graph": {"nodes": [], "edges": []},
+                "relationships": [],
+            }
+        if len(json.dumps(context)) > MAX_CONTEXT_CHARS:
+            trimmed["links"] = True
+            context["grounded_links"] = []
         while len(json.dumps(context)) > MAX_CONTEXT_CHARS and len(response["evidence"]) > 1:
             response["evidence"].pop()
-            context["graph"] = compact_graph(selected_graph())
-        response["graph"] = selected_graph()
+            trimmed["evidence"] += 1
+        response["graph"] = full_graph
         if len(json.dumps(context)) > MAX_CONTEXT_CHARS:
             raise SearchyError(
                 "The selected evidence exceeds the answer context budget; select fewer scenes", 422
+            )
+        if trimmed["graph"] or trimmed["evidence"]:
+            response["warnings"].append(
+                "Context trimmed to fit the answer budget: "
+                + ("graph expansion omitted" if trimmed["graph"] else "graph retained")
+                + (
+                    f", {trimmed['evidence']} evidence item(s) dropped"
+                    if trimmed["evidence"]
+                    else ""
+                )
             )
         response["retrieval"]["context_characters"] = len(json.dumps(context))
         response["retrieval"]["scene_ids"] = [scene.scene_id for scene in scenes]

@@ -1,12 +1,21 @@
 import argparse
 import logging
+import shutil
 import threading
 from pathlib import Path
 from uuid import uuid4
 
 from searchy.core.config import Settings
 from searchy.core.errors import SearchyError
-from searchy.domain import Observation, ObservationKind, Provenance, Scene, Video, stable_id
+from searchy.domain import (
+    Media,
+    Observation,
+    ObservationKind,
+    Provenance,
+    Scene,
+    Video,
+    stable_id,
+)
 from searchy.ingestion.importer import import_chunks
 from searchy.processing.video import VideoProcessor
 from searchy.services.container import Services
@@ -19,6 +28,83 @@ class Worker:
         self.services = services
         self.settings = services.settings
         self.owner = str(uuid4())
+
+    def prepare_upload(self, payload: dict, progress) -> tuple[list[Video], list[Scene], list[str]]:
+        from searchy.processing import captioning, chunking
+
+        path = Path(payload["path"]).resolve()
+        uploads = (self.settings.data_dir / "uploads").resolve()
+        if not path.is_relative_to(uploads):
+            raise SearchyError("Upload is outside managed media storage", 422)
+
+        title = Path(payload.get("title") or path.name).stem.strip() or path.stem
+        prepared_root = (self.settings.data_dir / "prepared").resolve()
+        episode_dir = prepared_root / title
+        dataset_root = prepared_root / f"{title}__dataset"
+
+        progress(0.03, "splitting video into chunks")
+        subtitles = self._find_upload_subtitles(payload, uploads)
+        chunked = chunking.process_episode(
+            path,
+            episode_dir,
+            self.settings,
+            subtitles,
+            force=bool(payload.get("force")),
+        )
+
+        progress(0.30, f"captioning {len(chunked.chunks)} chunks")
+        captioner = captioning.build_captioner(
+            self.settings,
+            self.settings.caption_backend,
+            self.settings.caption_model_id or None,
+            None,
+        )
+        # Only people registered for this collection may be named. Sending the
+        # shared portrait folder made the model attribute familiar names to
+        # unrelated footage.
+        captioner.references = captioning.collection_references(
+            self.settings, payload["collection_id"]
+        )
+        captioned = captioning.process_episode(episode_dir, captioner)
+        warnings = [*chunked.warnings, *captioned.warnings]
+
+        progress(0.75, "reading prepared chunks")
+        if dataset_root.exists():
+            shutil.rmtree(dataset_root, ignore_errors=True)
+        import_base = (dataset_root / "episodes_splitted").resolve()
+        import_base.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(episode_dir), str(import_base / title))
+        imported = import_chunks(
+            import_base,
+            payload["collection_id"],
+            None,
+            ffprobe_path=self.settings.ffprobe_path,
+            episode_media_dir=None,
+        )
+        videos, scenes = imported.videos, imported.scenes
+        warnings.extend(imported.warnings)
+        if self.settings.visual_enabled:
+            scenes = self.prepare_import_frames(scenes, progress)
+        if not payload.get("keep_prepared"):
+            shutil.rmtree(dataset_root, ignore_errors=True)
+
+        # Derived clips live under the throwaway dataset, which is deleted below
+        # unless it was asked for. Playback therefore has to point at the stored
+        # upload, keeping the chunk's offset so a scene still starts where it is.
+        duration = payload.get("duration")
+        for scene in scenes:
+            offset = scene.media.start_offset if scene.media else (scene.start or 0.0)
+            scene.media = Media(path=str(path), start_offset=offset, duration=duration)
+        return videos, scenes, warnings
+
+    def _find_upload_subtitles(self, payload: dict, uploads: Path) -> Path | None:
+        candidate = payload.get("subtitles_path")
+        if not candidate:
+            return None
+        path = Path(candidate).resolve()
+        if not path.is_relative_to(uploads) or not path.is_file():
+            raise SearchyError("Uploaded subtitle file is missing or outside managed storage", 422)
+        return path
 
     def prepare_import_frames(self, scenes: list[Scene], progress) -> list[Scene]:
         processor = VideoProcessor(self.settings)
@@ -335,24 +421,12 @@ class Worker:
             if self.settings.visual_enabled:
                 scenes = self.prepare_import_frames(scenes, progress)
         elif job["kind"] == "upload":
-            path = Path(payload["path"]).resolve()
-            if not path.is_relative_to((self.settings.data_dir / "uploads").resolve()):
-                raise SearchyError("Upload is outside managed media storage", 422)
-            video = Video(
-                video_id=stable_id(f"upload:{payload['collection_id']}:{payload['digest']}"),
-                collection_id=payload["collection_id"],
-                title=payload["title"],
-                original_id=payload["digest"],
-                source_kind="upload",
-                duration=payload["duration"],
-                media_path=str(path),
-            )
-            svc.metadata.save_video(video)
-            scenes = VideoProcessor(self.settings).process(
-                path, video, lambda value, stage: progress(0.03 + value * 0.52, stage)
-            )
-            videos, warnings = [video], []
-            stale = svc.metadata.scene_ids(video.video_id) - {s.scene_id for s in scenes}
+            videos, scenes, warnings = self.prepare_upload(payload, progress)
+            stale = {
+                scene_id
+                for video in videos
+                for scene_id in svc.metadata.scene_ids(video.video_id)
+            } - {scene.scene_id for scene in scenes}
         else:
             raise SearchyError("Unknown ingestion job type", 422)
         by_id = {video.video_id: video for video in videos}
@@ -395,6 +469,7 @@ class Worker:
             svc.metadata.delete_scenes(sorted(stale))
         return dict(
             videos=len(videos),
+            video_ids=[video.video_id for video in videos],
             scenes=len(scenes),
             indexed=len(pending),
             unchanged=skipped,

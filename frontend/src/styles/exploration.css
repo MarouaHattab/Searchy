@@ -79,6 +79,12 @@
 .answer-notes li + li {
   margin-top: 4px;
 }
+.answer-standing {
+  margin: 10px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  opacity: 0.8;
+}
 .spin {
   animation: searchy-spin 1.2s linear infinite;
 }

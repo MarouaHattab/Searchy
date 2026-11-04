@@ -10,6 +10,7 @@ const VideoPage = lazy(() => import('../pages/VideoPage'))
 const ScenePage = lazy(() => import('../features/player/ScenePage'))
 const CharactersPage = lazy(() => import('../pages/CharactersPage'))
 const JobsPage = lazy(() => import('../pages/JobsPage'))
+const ChatPage = lazy(() => import('../pages/ChatPage').then((m) => ({ default: m.ChatPage })))
 const SettingsPage = lazy(() => import('../pages/SettingsPage'))
 
 function NotFound() {
@@ -41,6 +42,7 @@ export default function App() {
         </Route>
         <Route path="library" element={<LibraryPage />} />
         <Route path="library/:id" element={<VideoPage />} />
+        <Route path="chat" element={<ChatPage />} />
         <Route path="characters" element={<CharactersPage />} />
         <Route path="jobs" element={<JobsPage />} />
         <Route path="settings" element={<SettingsPage />} />

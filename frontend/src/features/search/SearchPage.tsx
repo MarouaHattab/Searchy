@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { ArrowRight, Check, Clock3, Search, SlidersHorizontal, X } from 'lucide-react'
+import { ArrowRight, Check, Clock3, Search, SlidersHorizontal, Sparkles, X } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { SceneCard } from '../../components/SceneCard'
 import { Button, EmptyState, ErrorState, SectionHeading } from '../../components/ui'
@@ -110,6 +110,10 @@ export default function SearchPage({ href, frozen = false }: { href: string; fro
   useEffect(() => {
     setDraft(query)
   }, [query])
+  // Search returns scene matches and the evidence graph on its own. Asking the
+  // model for an answer is a deliberate second step, so a browse never waits on
+  // or pays for generation.
+  const [answerRequested, setAnswerRequested] = useState(false)
   const [follow, setFollow] = useState<{ question: string; sceneIds: string[] } | null>(null)
   const [followScenes, setFollowScenes] = useState<SceneMatch[]>([])
   const [followBusy, setFollowBusy] = useState(false)
@@ -125,6 +129,7 @@ export default function SearchPage({ href, frozen = false }: { href: string; fro
     if (seenIdentity.current !== identity) {
       seenIdentity.current = identity
       setHighlighted([])
+      setAnswerRequested(false)
       setFollow(null)
       setFollowScenes([])
       if (!sessionId) window.scrollTo(0, 0)
@@ -192,13 +197,16 @@ export default function SearchPage({ href, frozen = false }: { href: string; fro
     const saved = searchDestination('/scenes/return', '')
     if (saved !== '/search') navigate(saved, { replace: true })
   }, [frozen, query, navigate])
-  const answer = useAnswer({
-    query,
-    scene_ids: search.data?.results.slice(0, 12).map((s) => s.scene_id) ?? [],
-    collection_id: collection || undefined,
-    character_ids: characterId ? [characterId] : undefined,
-    search_id: search.data?.search_id,
-  })
+  const answer = useAnswer(
+    {
+      query,
+      scene_ids: search.data?.results.slice(0, 12).map((s) => s.scene_id) ?? [],
+      collection_id: collection || undefined,
+      character_ids: characterId ? [characterId] : undefined,
+      search_id: search.data?.search_id,
+    },
+    { enabled: answerRequested }
+  )
   const followAnswer = useAnswer({
     query: follow?.question ?? '',
     scene_ids: follow?.sceneIds ?? [],
@@ -473,13 +481,23 @@ export default function SearchPage({ href, frozen = false }: { href: string; fro
               </p>
             </div>
             {!settling && !!search.data?.results.length && (
-              <button
-                className={`filter-toggle ${playable ? 'selected' : ''}`}
-                aria-pressed={playable}
-                onClick={() => setPlayable(!playable)}
-              >
-                {playable && <Check size={13} />}Video available
-              </button>
+              <div className="results-actions">
+                {!answerRequested && (
+                  <button
+                    className="filter-toggle answer-start"
+                    onClick={() => setAnswerRequested(true)}
+                  >
+                    <Sparkles size={13} />Explain these matches
+                  </button>
+                )}
+                <button
+                  className={`filter-toggle ${playable ? 'selected' : ''}`}
+                  aria-pressed={playable}
+                  onClick={() => setPlayable(!playable)}
+                >
+                  {playable && <Check size={13} />}Video available
+                </button>
+              </div>
             )}
           </div>
           {settling ? (
@@ -510,7 +528,7 @@ export default function SearchPage({ href, frozen = false }: { href: string; fro
             />
           ) : (
             <>
-              {search.data && (
+              {search.data && answerRequested && (
                 <AnswerPanel
                   key={query + characterId + collection}
                   state={answer}

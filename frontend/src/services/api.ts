@@ -300,3 +300,113 @@ export async function streamAnswer(
     throw new ApiError('The answer stream ended early. Your scene results remain available.', 502)
   return final
 }
+
+export interface ChatSource {
+  number: number
+  scene_id: string
+  label: string
+  start: number | null
+  end: number | null
+  timestamp_basis: string
+  available: boolean
+  snippet: string
+}
+
+export interface ChatReply {
+  conversation_id: string
+  answer: string
+  sources: ChatSource[]
+  warnings: string[]
+  model: string | null
+}
+
+export interface ChatStreamHandlers {
+  onSources?: (sources: ChatSource[], warnings: string[]) => void
+  onDelta?: (text: string) => void
+}
+
+export async function streamChat(
+  body: { question: string; conversation_id?: string; collection_id?: string },
+  handlers: ChatStreamHandlers,
+  signal: AbortSignal
+): Promise<ChatReply> {
+  const response = await fetch(apiUrl('/api/chat/stream'), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    body: JSON.stringify(body),
+    signal: AbortSignal.any([signal, AbortSignal.timeout(300_000)]),
+  })
+  if (!response.ok)
+    throw new ApiError(errorMessage(await response.json().catch(() => null)), response.status)
+  if (!response.body) throw new ApiError('The chat stream is unavailable.', 502)
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  let final: ChatReply | null = null
+  try {
+    while (true) {
+      const { value, done } = await reader.read()
+      buffer += decoder.decode(value, { stream: !done })
+      buffer = buffer.replaceAll('\r\n', '\n')
+      let boundary = buffer.indexOf('\n\n')
+      while (boundary !== -1) {
+        const frame = buffer.slice(0, boundary)
+        buffer = buffer.slice(boundary + 2)
+        boundary = buffer.indexOf('\n\n')
+        const event = /^event: (.+)$/m.exec(frame)?.[1]?.trim()
+        const data = frame
+          .split('\n')
+          .filter((line) => line.startsWith('data:'))
+          .map((line) => line.slice(5).trimStart())
+          .join('\n')
+        if (!event || !data) continue
+        const payload = JSON.parse(data)
+        if (event === 'sources')
+          handlers.onSources?.(payload.sources ?? [], payload.warnings ?? [])
+        else if (event === 'delta' && typeof payload.text === 'string')
+          handlers.onDelta?.(payload.text)
+        else if (event === 'answer' && typeof payload.answer === 'string')
+          final = payload as ChatReply
+        else if (event === 'error')
+          throw new ApiError(String(payload.detail ?? 'The chat stream failed.'), 502)
+      }
+      if (done) break
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined)
+  }
+  if (!final) throw new ApiError('The chat stream ended early.', 502)
+  return final
+}
+
+export interface ChatConversation {
+  id: string
+  created: number
+  updated: number
+  title: string
+  first_question: string | null
+  turns: number
+}
+
+export interface ChatMessage {
+  id: string
+  created: number
+  role: 'user' | 'assistant'
+  content: string
+  data: { sources?: ChatSource[]; model?: string }
+}
+
+export async function listConversations(): Promise<ChatConversation[]> {
+  return request<ChatConversation[]>('/api/chat/conversations')
+}
+
+export async function loadConversation(
+  id: string
+): Promise<{ conversation_id: string; messages: ChatMessage[] }> {
+  return request(`/api/chat/conversations/${encodeURIComponent(id)}`)
+}
+
+export async function deleteConversation(id: string): Promise<{ deleted: boolean }> {
+  return request(`/api/chat/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}

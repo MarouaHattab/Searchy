@@ -32,9 +32,15 @@ export function AnswerPanel({
   const [copied, setCopied] = useState(false)
   const [followDraft, setFollowDraft] = useState('')
   const content = pending ? partial : (answer ?? partial)
-  const warnings = [
+  // The same two provenance caveats are emitted on every answer. Repeating them
+  // in full each time trains people to ignore the list, so the standing ones are
+  // collapsed into a single line and only query-specific limits are itemised.
+  const STANDING = [/unverified machine captions/i, /timestamps are inferred/i]
+  const allWarnings = [
     ...new Set([...(pending ? [] : (answer?.warnings ?? [])), ...retrievalWarnings]),
   ]
+  const standing = allWarnings.filter((w) => STANDING.some((r) => r.test(w)))
+  const warnings = allWarnings.filter((w) => !STANDING.some((r) => r.test(w)))
   const retrieval = answer?.retrieval
   if (!content && !pending && !failed && !stopped) return null
   return (
@@ -183,20 +189,22 @@ export function AnswerPanel({
           </ul>
         </details>
       )}
-      {!!answer?.constraints.length && (
-        <details className="answer-evidence">
-          <summary>Evidence assessment</summary>
-          <ul className="answer-notes">
-            {answer.constraints.map((item) => (
-              <li key={item.label}>
-                {item.supported ? 'Supported' : 'Not fully supported'} — {item.label}. {item.detail}
-              </li>
-            ))}
-          </ul>
-        </details>
-      )}
+      {!!answer?.constraints.length &&
+        answer.constraints.some((item) => !item.supported) && (
+          <details className="answer-evidence">
+            <summary>Evidence assessment</summary>
+            <ul className="answer-notes">
+              {answer.constraints.map((item) => (
+                <li key={item.label}>
+                  {item.supported ? 'Supported' : 'Not fully supported'} — {item.label}.{' '}
+                  {item.detail}
+                </li>
+              ))}
+            </ul>
+          </details>
+        )}
       {!!warnings.length && (
-        <details className="answer-evidence">
+        <details className="answer-evidence" open={warnings.length <= 2}>
           <summary>Limitations · {warnings.length}</summary>
           <ul className="answer-notes">
             {warnings.map((w) => (
@@ -204,6 +212,11 @@ export function AnswerPanel({
             ))}
           </ul>
         </details>
+      )}
+      {!!standing.length && (
+        <p className="answer-standing">
+          Captions are machine-generated and timestamps are inferred from chunks.
+        </p>
       )}
       {retrieval && (
         <details className="answer-evidence">

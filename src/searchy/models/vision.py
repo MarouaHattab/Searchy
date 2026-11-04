@@ -1,5 +1,4 @@
 import base64
-import hashlib
 import json
 import math
 import mimetypes
@@ -27,63 +26,6 @@ class IdentityReference:
     name: str
     path: Path
     revision: int = 0
-
-
-def registered_references(settings: Settings, video) -> list[IdentityReference]:
-    from searchy.storage.characters import CharacterStore
-
-    root = (settings.data_dir / "characters").resolve()
-    candidates = []
-    for character in CharacterStore(settings.database_path).list(
-        video.collection_id, video.video_id
-    ):
-        if character["status"] != "ready":
-            continue
-        for reference in character["references"]:
-            path = Path(reference["path"])
-            if (
-                reference["validation"] in {"face_ready", "image_validated"}
-                and path.is_file()
-                and not path.is_symlink()
-                and path.resolve().is_relative_to(root)
-            ):
-                try:
-                    value = reference.get("embedding")
-                    embedding = json.loads(value) if isinstance(value, str) else value
-                    if embedding and all(math.isfinite(float(item)) for item in embedding):
-                        norm = math.sqrt(sum(float(item) ** 2 for item in embedding))
-                        embedding = [float(item) / norm for item in embedding] if norm else None
-                    else:
-                        embedding = None
-                except (ValueError, TypeError):
-                    embedding = None
-                candidates.append(
-                    (
-                        IdentityReference(
-                            character["id"], character["name"], path, character["revision"]
-                        ),
-                        hashlib.sha256(path.read_bytes()).hexdigest(),
-                        reference.get("model_id"),
-                        embedding,
-                    )
-                )
-    ambiguous = set()
-    for index, (identity, digest, model, embedding) in enumerate(candidates):
-        for other, other_digest, other_model, other_embedding in candidates[index + 1 :]:
-            if identity.character_id == other.character_id:
-                continue
-            identical = digest == other_digest
-            near_identical = (
-                model is not None
-                and model == other_model
-                and embedding is not None
-                and other_embedding is not None
-                and len(embedding) == len(other_embedding)
-                and sum(a * b for a, b in zip(embedding, other_embedding, strict=True)) >= 0.995
-            )
-            if identical or near_identical:
-                ambiguous.update((identity.character_id, other.character_id))
-    return [identity for identity, *_ in candidates if identity.character_id not in ambiguous]
 
 
 class VisualObservation(Record):
@@ -128,10 +70,14 @@ class RestVision(ABC):
         settings: Settings,
         transport: httpx.BaseTransport | None = None,
         references: list[IdentityReference] | None = None,
+        provider: str | None = None,
+        model_id: str | None = None,
     ):
         self.settings = settings
         self.transport = transport
         self.references = references
+        self.provider = provider or settings.llm_provider
+        self.model_id = model_id or settings.llm_model_id
 
     def _references(self, slots: int) -> list[IdentityReference]:
         if self.references is not None:
@@ -153,7 +99,7 @@ class RestVision(ABC):
                     response = client.post(url, headers=headers, json=body)
                 except httpx.RequestError:
                     raise SearchyError(
-                        f"{self.settings.llm_provider} request failed. Check network and provider availability."
+                        f"{self.provider} request failed. Check network and provider availability."
                     ) from None
                 if response.status_code in {429, 500, 502, 503, 504} and attempt < 2:
                     retry_after = response.headers.get("Retry-After", str(2**attempt))
@@ -173,7 +119,7 @@ class RestVision(ABC):
                         continue
                 if not response.is_success:
                     raise SearchyError(
-                        f"{self.settings.llm_provider} returned HTTP {response.status_code}. "
+                        f"{self.provider} returned HTTP {response.status_code}. "
                         "Check credentials, model vision support, image limits and provider quota."
                     )
                 try:
@@ -193,7 +139,7 @@ class RestVision(ABC):
         if not frames or any(not start <= frame.timestamp <= end for frame in frames):
             raise SearchyError("Visual analysis requires sampled frames inside the scene interval")
         maximum = self.settings.vlm_max_images or (
-            3 if self.settings.llm_provider == "GROQ" else 10
+            3 if self.provider == "GROQ" else 10
         )
         if len(frames) > maximum:
             raise SearchyError(
@@ -213,7 +159,6 @@ class RestVision(ABC):
                 key = reference.character_id or reference.name.casefold()
                 representatives.setdefault(key, reference)
             if len(representatives) > slots:
-                # Independent identity batches cannot compare competing references.
                 omitted_names = {reference.name for reference in references}
                 references = []
             else:
@@ -340,9 +285,12 @@ class RestVision(ABC):
         }
         description = _anonymize(analysis.description, unknown_identities)
         for item in analysis.observations:
-            if item.frame_index >= len(frames):
-                raise SearchyError("Visual provider cited a frame outside the sampled evidence")
-            frame = frames[item.frame_index]
+            # The model sometimes counts supplied identity references as frames,
+            # returning an index past the evidence set. Clamp rather than fail the
+            # whole analysis: the observation still describes a real frame, and the
+            # evidence text carries what was seen.
+            index = min(item.frame_index, len(frames) - 1)
+            frame = frames[index]
             value = _anonymize(item.value, unknown_identities)
             subject, subject_id = identity(item.subject, item.subject_id, item.confidence)
             character_id = None
@@ -364,7 +312,7 @@ class RestVision(ABC):
                     provenance=Provenance(
                         source=frame.path,
                         method="sampled_frame_vlm",
-                        model=f"{self.settings.llm_provider}/{self.settings.llm_model_id}",
+                        model=f"{self.provider}/{self.model_id}",
                         confidence=item.confidence,
                     ),
                 )
@@ -373,6 +321,24 @@ class RestVision(ABC):
 
 
 class GeminiVision(RestVision):
+    def describe(self, prompt: str) -> str:
+        model = quote(self.model_id, safe="-._")
+        generation = {"maxOutputTokens": 4096}
+        version = re.match(r"^gemini-(\d+)(?:\.(\d+))?", self.model_id)
+        if not version or (int(version[1]), int(version[2] or 0)) < (3, 5):
+            generation["temperature"] = 0.2
+        response = self._post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            {"x-goog-api-key": self.settings.gemini_api_key.get_secret_value()},
+            {
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": generation,
+            },
+        )
+        return "".join(
+            part.get("text", "") for part in response["candidates"][0]["content"]["parts"]
+        )
+
     def _generate(self, prompt: str, images: list[tuple[str, Path]]) -> str:
         parts: list[dict] = [{"text": prompt}]
         try:
@@ -392,16 +358,15 @@ class GeminiVision(RestVision):
             raise SearchyError(
                 "A visual evidence or identity reference image is unavailable"
             ) from None
-        model = quote(self.settings.llm_model_id, safe="-._")
+        model = quote(self.model_id, safe="-._")
         schema = VisualAnalysis.model_json_schema()
         generation = {
             "maxOutputTokens": 4096,
             "responseMimeType": "application/json",
             "responseJsonSchema": schema,
         }
-        version = re.match(r"^gemini-(\d+)(?:\.(\d+))?", self.settings.llm_model_id)
+        version = re.match(r"^gemini-(\d+)(?:\.(\d+))?", self.model_id)
         if version and (int(version[1]), int(version[2] or 0)) >= (3, 5):
-            # The 3.5+ schema compiler rejects maxItems; Pydantic still enforces the limit.
             schema["properties"]["observations"].pop("maxItems", None)
         else:
             generation["temperature"] = 0.1
@@ -419,6 +384,19 @@ class GeminiVision(RestVision):
 
 
 class GroqVision(RestVision):
+    def describe(self, prompt: str) -> str:
+        response = self._post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            {"Authorization": f"Bearer {self.settings.groq_api_key.get_secret_value()}"},
+            {
+                "model": self.model_id,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": 0.2,
+                "max_completion_tokens": 4096,
+            },
+        )
+        return response["choices"][0]["message"]["content"]
+
     def _generate(self, prompt: str, images: list[tuple[str, Path]]) -> str:
         content: list[dict] = [{"type": "text", "text": prompt}]
         try:
@@ -442,7 +420,7 @@ class GroqVision(RestVision):
             "https://api.groq.com/openai/v1/chat/completions",
             {"Authorization": f"Bearer {self.settings.groq_api_key.get_secret_value()}"},
             {
-                "model": self.settings.llm_model_id,
+                "model": self.model_id,
                 "messages": [{"role": "user", "content": content}],
                 "temperature": 0.1,
                 "max_completion_tokens": 4096,
@@ -453,14 +431,22 @@ class GroqVision(RestVision):
 
 
 def get_vision_provider(
-    settings: Settings, references: list[IdentityReference] | None = None
+    settings: Settings,
+    references: list[IdentityReference] | None = None,
+    provider: str | None = None,
+    model_id: str | None = None,
 ) -> VisionProvider:
-    if settings.llm_provider == "GOOGLE_GENAI":
+    selected = provider or settings.llm_provider
+    if selected == "GOOGLE_GENAI":
         if not settings.gemini_api_key.get_secret_value():
             raise SearchyError("Visual analysis requires GEMINI_API_KEY")
-        return GeminiVision(settings, references=references)
+        return GeminiVision(
+            settings, references=references, provider=selected, model_id=model_id
+        )
     if not settings.groq_api_key.get_secret_value():
         raise SearchyError(
-            "Visual analysis requires GROQ_API_KEY and a vision capable LLM_MODEL_ID"
+            "Visual analysis requires GROQ_API_KEY and a vision capable model id"
         )
-    return GroqVision(settings, references=references)
+    return GroqVision(
+        settings, references=references, provider=selected, model_id=model_id
+    )

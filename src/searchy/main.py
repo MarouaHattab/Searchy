@@ -16,6 +16,7 @@ from starlette.concurrency import run_in_threadpool
 from searchy.api.answers import SearchSessionResponse, create_answers_router
 from searchy.api.catalog import create_catalog_router
 from searchy.api.characters import create_character_router
+from searchy.api.chat import create_chat_router
 from searchy.api.exploration import create_exploration_router
 from searchy.api.schemas import (
     ImportRequest,
@@ -177,7 +178,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         "/api/videos/upload", status_code=202, response_model=JobResponse, dependencies=api
     )
     async def upload(
-        file: UploadFile = File(...), collection_id: str = Form("uploads"), svc=Depends(services)
+        file: UploadFile = File(...),
+        collection_id: str = Form("uploads"),
+        subtitles: UploadFile | None = File(default=None),
+        svc=Depends(services),
     ):
         if not re.fullmatch(r"[a-zA-Z0-9_-]{1,80}", collection_id):
             raise InvalidInput(
@@ -206,6 +210,21 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             metadata = await run_in_threadpool(VideoProcessor(config).probe, temporary)
             destination = directory / f"{digest.hexdigest()}{suffix}"
             temporary.replace(destination)
+            subtitles_path = None
+            if subtitles is not None:
+                cue_suffix = Path(subtitles.filename or "").suffix.lower()
+                if cue_suffix not in {".vtt", ".srt"}:
+                    raise InvalidInput("Upload subtitles as a .vtt or .srt file")
+                cues = directory / f"{digest.hexdigest()}{cue_suffix}"
+                pending_cues = cues.with_suffix(f".pending{cue_suffix}")
+                with pending_cues.open("wb") as output:
+                    while block := await subtitles.read(1024 * 1024):
+                        output.write(block)
+                if pending_cues.stat().st_size == 0:
+                    pending_cues.unlink(missing_ok=True)
+                    raise InvalidInput("Subtitle file is empty")
+                pending_cues.replace(cues)
+                subtitles_path = str(cues.resolve())
             job = svc.metadata.create_job(
                 "upload",
                 {
@@ -214,6 +233,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     "title": Path(file.filename or "video").name,
                     "collection_id": collection_id,
                     "duration": metadata.duration,
+                    **({"subtitles_path": subtitles_path} if subtitles_path else {}),
                 },
             )
             return public_job(job)
@@ -328,6 +348,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(create_answers_router(config, services, authorize))
     application.include_router(create_exploration_router(config, services, authorize))
     application.include_router(create_character_router(config, services, authorize))
+    application.include_router(create_chat_router(config, services, authorize))
     return application
 
 

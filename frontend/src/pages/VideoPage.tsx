@@ -46,7 +46,29 @@ export default function VideoPage() {
   })
 
   if (video.isPending) return <Loading label="Loading video details…" />
-  if (video.isError) return <ErrorState error={video.error} retry={() => void video.refetch()} />
+  // A link can outlive the record it points at, because video ids are derived
+  // from the import and change when a file is re-processed. Rather than dead-end
+  // on "Video not found", offer somewhere useful.
+  if (video.isError)
+    return (
+      <div className="catalog-page stack">
+        <Link className="text-link video-back" to="/library">
+          <ArrowLeft size={15} />
+          Video library
+        </Link>
+        <div className="state-panel">
+          <Search size={30} />
+          <h1>That video is no longer in the library.</h1>
+          <p>
+            It may have been re-processed, which gives it a new identifier. The library lists
+            every video currently indexed.
+          </p>
+          <Link className="primary" to="/library">
+            Open the video library
+          </Link>
+        </div>
+      </div>
+    )
 
   const item = video.data
   const dialogueCount = scenes.data?.reduce((total, scene) => total + scene.dialogue.length, 0) ?? 0

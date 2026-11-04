@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     qdrant_collection_name: str = "searchy_scenes"
     llm_provider: Literal["GOOGLE_GENAI", "GROQ"] = "GOOGLE_GENAI"
     llm_model_id: str = "gemini-3.5-flash-lite"
+    caption_provider: Literal["GOOGLE_GENAI", "GROQ"] = "GOOGLE_GENAI"
+    caption_api_model_id: str = ""
     gemini_api_key: SecretStr = SecretStr("")
     groq_api_key: SecretStr = SecretStr("")
     embedding_provider: Literal["LOCAL_EMBEDDING"] = "LOCAL_EMBEDDING"
@@ -43,11 +45,18 @@ class Settings(BaseSettings):
     ffprobe_path: str = "ffprobe"
     max_upload_mb: int = Field(default=2048, ge=1)
     max_video_seconds: int = Field(default=14400, ge=1)
-    scene_min_seconds: float = Field(default=8, gt=0)
-    scene_max_seconds: float = Field(default=60, gt=0)
     frames_per_scene: int = Field(default=3, ge=1, le=8)
     provider_timeout_seconds: float = Field(default=90, gt=0)
     vlm_max_images: int | None = Field(default=None, ge=1, le=32)
+    caption_backend: Literal["api", "local"] = "api"
+    caption_model_id: str = ""
+    vllm_base_url: str = ""
+    vlm_identity_min_confidence: float = Field(default=0.85, ge=0, le=1)
+    chat_model: str = "gemma3:1b"
+    chat_context: int = Field(default=8192, ge=1024)
+    chat_max_tokens: int = Field(default=700, ge=64)
+    chat_temperature: float = Field(default=0.2, ge=0, le=2)
+    chat_source_limit: int = Field(default=20, ge=1, le=40)
     worker_enabled: bool = True
     worker_poll_seconds: float = Field(default=2, gt=0)
     worker_shutdown_timeout_seconds: float = Field(default=10, gt=0)

@@ -18,6 +18,8 @@ dependencies = [
 [project.optional-dependencies]
 models = ["sentence-transformers>=5.1,<6", "pillow>=11,<13"]
 video = ["faster-whisper>=1.1,<2", "av>=11,<19", "scenedetect>=0.6.7,<0.7", "opencv-python-headless>=4.10,<5"]
+# Offline dataset preparation only (processing.captioning). Needs a CUDA GPU.
+preprocess = ["vllm>=0.11,<1", "qwen-vl-utils>=0.0.14,<1", "transformers>=4.57,<5"]
 
 [dependency-groups]
 dev = ["pytest>=8.3,<10", "ruff>=0.11,<1"]
