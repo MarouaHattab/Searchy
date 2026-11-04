@@ -3,7 +3,7 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
-from pydantic import Field, field_validator
+from pydantic import ConfigDict, Field, field_validator
 
 from searchy.core import Settings
 from searchy.domain import Record
@@ -50,14 +50,25 @@ class AnswerCitation(Record):
 
 
 class AnswerEvidence(Record):
+    model_config = ConfigDict(extra="ignore")
     evidence_id: str
     scene_id: str
     kind: str
     text: str
     verified: bool
-    confidence: float | None
-    start: float | None
-    end: float | None
+    confidence: float | None = None
+    start: float | None = None
+    end: float | None = None
+    episode_id: str | None = None
+    visual_characters: list[str] = Field(default_factory=list)
+    evidence_source: str | None = None
+    source_start: float | None = None
+    source_end: float | None = None
+    speaker_id: str | None = None
+    speaker_name: str | None = None
+    speaker_confidence: float | None = None
+    mentioned_characters: list[dict] = Field(default_factory=list)
+    subject_characters: list[dict] = Field(default_factory=list)
 
 
 class AnswerRelationshipLink(Record):
