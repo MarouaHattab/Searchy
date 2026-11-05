@@ -19,8 +19,6 @@
 
 **Searchy** is a multimodal video search engine built on top of Vision-Language Models, Neo4j, and Qdrant. It lets you query long-form video using natural language, returning exact video moments, character relationships, and grounded summaries backed by interactive video timestamps.
 
----
-
 ## Demo
 
 [▶ Watch Searchy Demo](https://github.com/user-attachments/assets/02acaae1-fc4b-4727-b5c5-54ff3c43043b)
