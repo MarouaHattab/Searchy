@@ -23,7 +23,7 @@ CHARACTER_ALIASES = {
     "joey": ["joey", "joey tribbiani"],
     "chandler": ["chandler", "chandler bing"],
     "ross": ["ross", "ross geller"],
-    "gunther": ["gunther"],
+    "gunther": ["gunther", "barista"],
     "janice": ["janice"],
     "carol": ["carol", "carol willick"],
     "susan": ["susan", "susan bunch"],
