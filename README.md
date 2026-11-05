@@ -19,13 +19,13 @@
 
 **Searchy** is a multimodal video search engine built on top of Vision-Language Models, Neo4j, and Qdrant. It lets you query long-form video using natural language, returning exact video moments, character relationships, and grounded summaries backed by interactive video timestamps.
 
-## Demo
+## 🎬 Demo
 
 [▶ Watch Searchy Demo](https://github.com/user-attachments/assets/02acaae1-fc4b-4727-b5c5-54ff3c43043b)
 
 ---
 
-### Languages & Tech Stack
+### 🛠️ Languages & Tech Stack
 
 - **Languages**:
   - **Python 3.12**: Backend API, VLM grounding pipeline, hybrid retrieval algorithms, and video processing.
@@ -40,16 +40,16 @@
 
 ---
 
-## Installation & Setup
+## 🚀 Installation & Setup
 
-### Prerequisites
+### 📋 Prerequisites
 
 - Python 3.12+
 - Node.js 18+ & npm
 - Docker & Docker Compose
 - FFmpeg
 
-### Python Packages
+### 📦 Python Packages
 
 We use `uv` for lightning-fast dependency management, but you can also use `pip`.
 
@@ -63,7 +63,7 @@ npm install
 cd ..
 ```
 
-### Docker Services
+### 🐳 Docker Services
 
 The system relies on **Neo4j** for the Knowledge Graph and **Qdrant** for the Vector Database.
 
@@ -76,7 +76,7 @@ This will start:
 - **Neo4j**: Accessible at `http://localhost:7474` (Bolt: `7687`)
 - **Qdrant**: Accessible at `http://localhost:6333` (Dashboard: `http://localhost:6333/dashboard`)
 
-### Environment Variables
+### ⚙️ Environment Variables
 
 Create a `.env` file based on `.env.example`:
 
@@ -107,7 +107,7 @@ NIM_MODEL_ID=nvidia/nemotron-3.5-bolt-e4b
 
 ---
 
-## Running the Application
+## 💻 Running the Application
 
 ### 1. Start Backend Server
 
@@ -128,7 +128,7 @@ Open `http://127.0.0.1:5173` in your browser.
 
 ---
 
-## Project Structure
+## 📁 Project Structure
 
 ```text
 Searchy/
@@ -163,7 +163,7 @@ Searchy/
 
 ---
 
-## System Architecture & Workflow
+## 🏗️ System Architecture & Workflow
 
 Searchy converts full-length video into a structured, searchable knowledge graph. The system is designed to solve a fundamental problem in video retrieval: video frames, dialogue lines, and visual actions are completely disconnected in raw video files. By processing video across four connected stages, Searchy grounds visual appearances to verified character identities and organizes everything into a queryable graph.
 
@@ -178,7 +178,7 @@ The overall pipeline shown above handles video data in four phases:
 
 ---
 
-### 1. Video Preprocessing & Alignment
+### 1. Video Preprocessing & Alignment 🎥
 
 Before an AI model can analyze long video content, the media must be broken down into manageable, synchronized units. Processing an entire 30-minute episode in a single prompt exceeds context windows and leads to temporal confusion. Searchy breaks videos into standardized 1-minute intervals while aligning dialogue and facial features.
 
@@ -202,7 +202,7 @@ Dialogue transcripts alone often lack speaker labels. Searchy aligns raw subtitl
 
 ---
 
-### 2. VLM Grounded Captioning
+### 2. VLM Grounded Captioning 👁️
 
 Once 1-minute clips are prepared, a Vision-Language Model (VLM) analyzes the visual content. Standard vision models frequently hallucinate character identities—confusing similar-looking actors, mistaking background extras for main characters, or inventing names that don't exist in the series.
 
@@ -221,7 +221,7 @@ This structured breakdown ensures that visual queries (such as *"Monica wearing 
 
 ---
 
-### 3. Knowledge Graph & Storage Indexing
+### 3. Knowledge Graph & Storage Indexing 🕸️
 
 Unstructured captions and dialogue lines must be organized into databases optimized for both deep relationship queries and fast semantic search. Searchy indexes every episode across three complementary storage systems.
 
@@ -255,7 +255,7 @@ To balance fuzzy conceptual search with exact keyword lookups, Searchy maintains
 
 ---
 
-### 4. Hybrid Retrieval & Factual Verification
+### 4. Hybrid Retrieval & Factual Verification 🔍
 
 When a user submits a question through the chat interface, Searchy executes a multi-stage retrieval pipeline designed to prevent hallucinations and ground every answer in verifiable video timestamps.
 
@@ -287,11 +287,11 @@ The response streams to the user interface alongside interactive source citation
 
 ---
 
-## Research & Evaluation Benchmark
+## 📊 Research & Evaluation Benchmark
 
 To rigorously quantify retrieval precision, hallucination suppression, and factual faithfulness across multimodal queries, Searchy implements a dual-methodology evaluation framework designed for Master's thesis research and academic benchmarking.
 
-### 1. Benchmark Dataset Design
+### 1. Benchmark Dataset Design 🎯
 
 The benchmark consists of **120 curated gold-standard question-answer pairs** spanning all **24 episodes of Season 1** (24 episodes x 5 questions = 120 QA pairs), indexed in [`evaluation/data/benchmark_120.json`](evaluation/data/benchmark_120.json). The questions are systematically stratified across four multimodal retrieval archetypes:
 
@@ -302,7 +302,7 @@ The benchmark consists of **120 curated gold-standard question-answer pairs** sp
 
 ---
 
-### 2. Dual Evaluation Methodology
+### 2. Dual Evaluation Methodology ⚖️
 
 Evaluation is executed simultaneously across two complementary paradigms:
 
@@ -321,7 +321,7 @@ Evaluation is executed simultaneously across two complementary paradigms:
 
 ---
 
-### 3. Quantitative Results & Ablation Analysis
+### 3. Quantitative Results & Ablation Analysis 📈
 
 We evaluate the empirical performance of Searchy's Multimodal GraphRAG architecture against a standard baseline dense vector retrieval pipeline across the 120-question benchmark:
 
@@ -347,7 +347,7 @@ We evaluate the empirical performance of Searchy's Multimodal GraphRAG architect
 
 ---
 
-### 4. Findings & Architectural Discussion
+### 4. Findings & Architectural Discussion 💡
 
 1. **Multimodal Evidence Preservation**:  
    Early baselines suffered from *verification starvation* when video snippets stripped dialogue subtitles from visual descriptions. Preserving both visual context (`seen`) and timestamped utterances (`said`) provides the full evidentiary context required for Natural Language Inference, driving Claim Entailment to **1.0000 (100%)**.
@@ -360,7 +360,7 @@ We evaluate the empirical performance of Searchy's Multimodal GraphRAG architect
 
 ---
 
-### 5. Reproducibility & Benchmark Execution
+### 5. Reproducibility & Benchmark Execution 🔬
 
 The evaluation suite is fully reproducible through the evaluation CLI:
 
