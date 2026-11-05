@@ -9,7 +9,8 @@ __pycache__/
 .ruff_cache/
 .local-tests/
 var/
-data/
+/data/
+!evaluation/data/
 dist/
 *.egg-info/
 *.mp4

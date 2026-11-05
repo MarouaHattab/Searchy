@@ -1,0 +1,157 @@
+{
+  "summary": {
+    "timestamp": "2026-11-05T01:08:49.346016+00:00",
+    "total_questions": 3,
+    "model": "nvidia/nemotron-3.5-bolt-e4b",
+    "ragas": {
+      "faithfulness": 0.1667,
+      "answer_relevancy": 0.8072,
+      "context_precision": 0.0,
+      "context_recall": 0.0
+    },
+    "domain": {
+      "claim_entailment_rate": 0.5556,
+      "citation_precision": 0.3527,
+      "episode_citation_rate": 1.0,
+      "mrr": 0.7778,
+      "f1": 0.4789
+    }
+  },
+  "category_breakdown": {
+    "dialogue": {
+      "count": 2,
+      "claim_entailment_rate": 0.3333,
+      "citation_precision": 0.1956,
+      "episode_citation_rate": 1.0,
+      "ragas_faithfulness": 0.0,
+      "ragas_relevancy": 0.8411
+    },
+    "visual": {
+      "count": 1,
+      "claim_entailment_rate": 1.0,
+      "citation_precision": 0.6667,
+      "episode_citation_rate": 1.0,
+      "ragas_faithfulness": 0.5,
+      "ragas_relevancy": 0.7393
+    }
+  },
+  "detailed_results": [
+    {
+      "id": "Q001",
+      "episode_id": "1x01",
+      "category": "visual",
+      "question": "What is Rachel Green wearing when she first bursts into Central Perk in the pilot?",
+      "ground_truth_answer": "Rachel Green arrives at Central Perk soaking wet and wearing a wedding dress after running away from her wedding to Barry.",
+      "ground_truth_keywords": [
+        "wedding dress",
+        "soaked",
+        "Central Perk",
+        "Barry",
+        "altar"
+      ],
+      "answer": "Rachel Green arrived at Central Perk in a soaked wedding dress after leaving her fiancé Barry at the altar and reunited with Monica [3] .",
+      "elapsed_seconds": 33.87,
+      "sources_count": 3,
+      "domain": {
+        "claim_entailment_rate": 1.0,
+        "claims_total": 1,
+        "claims_verified": 1,
+        "claims_unverified": 0,
+        "claims_refuted": 0,
+        "citation_precision": 0.6667,
+        "episode_cited": true,
+        "mrr": 0.3333,
+        "hit@1": 0.0,
+        "hit@3": 1.0,
+        "hit@5": 1.0,
+        "f1": 0.5517,
+        "precision": 0.5333,
+        "recall": 0.5714
+      },
+      "ragas": {
+        "faithfulness": 0.5,
+        "answer_relevancy": 0.7392710435985003,
+        "context_precision": 0.0,
+        "context_recall": 0.0
+      }
+    },
+    {
+      "id": "Q002",
+      "episode_id": "1x01",
+      "category": "dialogue",
+      "question": "What shoe and purse metaphor does Rachel use when explaining her life choice to her father on the phone?",
+      "ground_truth_answer": "Rachel explains to her father that all her life people have told her she was a shoe, but what if she doesn't want to be a shoe and wants to be a purse or a hat instead.",
+      "ground_truth_keywords": [
+        "shoe",
+        "purse",
+        "hat",
+        "father",
+        "metaphor"
+      ],
+      "answer": "Rachel uses the metaphor that \"You're a shoe, but what if I want to be a purse?\" when explaining her decision to her father over the phone [1]. This statement was made while Rachel was in a white wedding dress at Central Perk after leaving her fiancé Barry at the altar [1]. You're a shoe!' Then today I stopped and said, 'What if I don't wanna be a shoe?'\" [4].",
+      "elapsed_seconds": 14.47,
+      "sources_count": 23,
+      "domain": {
+        "claim_entailment_rate": 0.6667,
+        "claims_total": 3,
+        "claims_verified": 2,
+        "claims_unverified": 1,
+        "claims_refuted": 0,
+        "citation_precision": 0.2174,
+        "episode_cited": true,
+        "mrr": 1.0,
+        "hit@1": 1.0,
+        "hit@3": 1.0,
+        "hit@5": 1.0,
+        "f1": 0.3137,
+        "precision": 0.2424,
+        "recall": 0.4444
+      },
+      "ragas": {
+        "faithfulness": 0.0,
+        "answer_relevancy": 0.8447039955327713,
+        "context_precision": 0.0,
+        "context_recall": 0.0
+      }
+    },
+    {
+      "id": "Q003",
+      "episode_id": "1x01",
+      "category": "dialogue",
+      "question": "What ice cream metaphor does Joey use to motivate Ross after Carol leaves him?",
+      "ground_truth_answer": "Joey tells Ross that Carol was just one flavor of ice cream and urges him to realize there are many other flavors available, telling him to 'Grab a spoon'.",
+      "ground_truth_keywords": [
+        "ice cream",
+        "flavor",
+        "spoon",
+        "grab a spoon",
+        "Carol"
+      ],
+      "answer": "Joey uses the metaphor that saying there is only one flavor of ice cream for Ross is like saying there is only one flavor of ice cream for him, and then tells Ross that there are many flavors available, such as those with jimmies, nuts, or whipped cream [6] [6].",
+      "elapsed_seconds": 14.01,
+      "sources_count": 23,
+      "domain": {
+        "claim_entailment_rate": 0.0,
+        "claims_total": 1,
+        "claims_verified": 0,
+        "claims_unverified": 1,
+        "claims_refuted": 0,
+        "citation_precision": 0.1739,
+        "episode_cited": true,
+        "mrr": 1.0,
+        "hit@1": 1.0,
+        "hit@3": 1.0,
+        "hit@5": 1.0,
+        "f1": 0.5714,
+        "precision": 0.5455,
+        "recall": 0.6
+      },
+      "ragas": {
+        "faithfulness": 0.0,
+        "answer_relevancy": 0.837547075653252,
+        "context_precision": 0.0,
+        "context_recall": 0.0
+      }
+    }
+  ]
+}
