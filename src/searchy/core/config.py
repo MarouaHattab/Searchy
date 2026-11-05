@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     chat_model: str = Field(default="")
     chat_context: int = Field(default=8192, ge=1024)
     chat_max_tokens: int = Field(default=1500, ge=64)
-    chat_temperature: float = Field(default=0.2, ge=0, le=2)
+    chat_temperature: float = Field(default=0.1, ge=0, le=2)
     chat_source_limit: int = Field(default=20, ge=1, le=40)
 
     # 9. Search & Worker Thresholds (loaded from .env)

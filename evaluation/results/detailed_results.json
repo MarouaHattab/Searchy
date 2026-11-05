@@ -1,38 +1,38 @@
 {
   "summary": {
-    "timestamp": "2026-11-05T01:08:49.346016+00:00",
+    "timestamp": "2026-11-05T01:39:39.070825+00:00",
     "total_questions": 3,
     "model": "nvidia/nemotron-3.5-bolt-e4b",
     "ragas": {
-      "faithfulness": 0.1667,
-      "answer_relevancy": 0.8072,
-      "context_precision": 0.0,
-      "context_recall": 0.0
+      "faithfulness": 0.7833,
+      "answer_relevancy": 0.7224,
+      "context_precision": 0.3611,
+      "context_recall": 0.5556
     },
     "domain": {
-      "claim_entailment_rate": 0.5556,
-      "citation_precision": 0.3527,
+      "claim_entailment_rate": 1.0,
+      "citation_precision": 0.657,
       "episode_citation_rate": 1.0,
       "mrr": 0.7778,
-      "f1": 0.4789
+      "f1": 0.5207
     }
   },
   "category_breakdown": {
     "dialogue": {
       "count": 2,
-      "claim_entailment_rate": 0.3333,
-      "citation_precision": 0.1956,
+      "claim_entailment_rate": 1.0,
+      "citation_precision": 0.6522,
       "episode_citation_rate": 1.0,
-      "ragas_faithfulness": 0.0,
-      "ragas_relevancy": 0.8411
+      "ragas_faithfulness": 0.675,
+      "ragas_relevancy": 0.7424
     },
     "visual": {
       "count": 1,
       "claim_entailment_rate": 1.0,
       "citation_precision": 0.6667,
       "episode_citation_rate": 1.0,
-      "ragas_faithfulness": 0.5,
-      "ragas_relevancy": 0.7393
+      "ragas_faithfulness": 1.0,
+      "ragas_relevancy": 0.6824
     }
   },
   "detailed_results": [
@@ -49,8 +49,8 @@
         "Barry",
         "altar"
       ],
-      "answer": "Rachel Green arrived at Central Perk in a soaked wedding dress after leaving her fiancé Barry at the altar and reunited with Monica [3] .",
-      "elapsed_seconds": 33.87,
+      "answer": "Rachel arrives at Central Perk in a soaked wedding dress after leaving Barry at the altar [3] [3].",
+      "elapsed_seconds": 31.82,
       "sources_count": 3,
       "domain": {
         "claim_entailment_rate": 1.0,
@@ -64,15 +64,15 @@
         "hit@1": 0.0,
         "hit@3": 1.0,
         "hit@5": 1.0,
-        "f1": 0.5517,
-        "precision": 0.5333,
-        "recall": 0.5714
+        "f1": 0.5833,
+        "precision": 0.7,
+        "recall": 0.5
       },
       "ragas": {
-        "faithfulness": 0.5,
-        "answer_relevancy": 0.7392710435985003,
-        "context_precision": 0.0,
-        "context_recall": 0.0
+        "faithfulness": 1.0,
+        "answer_relevancy": 0.6824063717693141,
+        "context_precision": 0.3333333333,
+        "context_recall": 1.0
       }
     },
     {
@@ -88,29 +88,29 @@
         "father",
         "metaphor"
       ],
-      "answer": "Rachel uses the metaphor that \"You're a shoe, but what if I want to be a purse?\" when explaining her decision to her father over the phone [1]. This statement was made while Rachel was in a white wedding dress at Central Perk after leaving her fiancé Barry at the altar [1]. You're a shoe!' Then today I stopped and said, 'What if I don't wanna be a shoe?'\" [4].",
-      "elapsed_seconds": 14.47,
+      "answer": "Rachel uses the metaphor that \"You're a shoe, but what if I want to be a purse\" when explaining her decision to leave Barry to her father using the shoe metaphor [1] [4].",
+      "elapsed_seconds": 17.45,
       "sources_count": 23,
       "domain": {
-        "claim_entailment_rate": 0.6667,
-        "claims_total": 3,
-        "claims_verified": 2,
-        "claims_unverified": 1,
+        "claim_entailment_rate": 1.0,
+        "claims_total": 1,
+        "claims_verified": 1,
+        "claims_unverified": 0,
         "claims_refuted": 0,
-        "citation_precision": 0.2174,
+        "citation_precision": 0.7826,
         "episode_cited": true,
         "mrr": 1.0,
         "hit@1": 1.0,
         "hit@3": 1.0,
         "hit@5": 1.0,
-        "f1": 0.3137,
-        "precision": 0.2424,
+        "f1": 0.4571,
+        "precision": 0.4706,
         "recall": 0.4444
       },
       "ragas": {
-        "faithfulness": 0.0,
-        "answer_relevancy": 0.8447039955327713,
-        "context_precision": 0.0,
+        "faithfulness": 0.75,
+        "answer_relevancy": 0.7480675729759693,
+        "context_precision": 0.7499999999625,
         "context_recall": 0.0
       }
     },
@@ -127,30 +127,30 @@
         "grab a spoon",
         "Carol"
       ],
-      "answer": "Joey uses the metaphor that saying there is only one flavor of ice cream for Ross is like saying there is only one flavor of ice cream for him, and then tells Ross that there are many flavors available, such as those with jimmies, nuts, or whipped cream [6] [6].",
-      "elapsed_seconds": 14.01,
+      "answer": "Joey says that saying there is only one flavor of ice cream for Ross is like saying there is only one flavor of ice cream for him [6] [693.40-697.03s]. He then tells Ross that there are many flavors available, such as those with jimmies, nuts, or whipped cream [6] [697.20-710.71s].",
+      "elapsed_seconds": 12.96,
       "sources_count": 23,
       "domain": {
-        "claim_entailment_rate": 0.0,
-        "claims_total": 1,
-        "claims_verified": 0,
-        "claims_unverified": 1,
+        "claim_entailment_rate": 1.0,
+        "claims_total": 2,
+        "claims_verified": 2,
+        "claims_unverified": 0,
         "claims_refuted": 0,
-        "citation_precision": 0.1739,
+        "citation_precision": 0.5217,
         "episode_cited": true,
         "mrr": 1.0,
         "hit@1": 1.0,
         "hit@3": 1.0,
         "hit@5": 1.0,
-        "f1": 0.5714,
-        "precision": 0.5455,
+        "f1": 0.5217,
+        "precision": 0.4615,
         "recall": 0.6
       },
       "ragas": {
-        "faithfulness": 0.0,
-        "answer_relevancy": 0.837547075653252,
+        "faithfulness": 0.6,
+        "answer_relevancy": 0.7367599757008526,
         "context_precision": 0.0,
-        "context_recall": 0.0
+        "context_recall": 0.6666666666666666
       }
     }
   ]

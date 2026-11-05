@@ -10,6 +10,9 @@ def _clean_source(src: dict) -> dict:
         "available": src.get("available", False),
         "snippet": src.get("snippet", ""),
         "description": src.get("description", "") or src.get("snippet", ""),
+        "seen": src.get("seen", ""),
+        "said": src.get("said", ""),
+        "text": src.get("text", ""),
     }
 import json
 import re
@@ -34,34 +37,32 @@ _MARKUP = re.compile("|".join([r"[#*_`>]+"] + [re.escape(h) + ":?" for h in _HEA
 SYSTEM = """You are Searchy, answering questions about an indexed video collection.
 Every numbered source below comes from that collection. Use only those sources.
 If they do not contain the answer, say so plainly instead of guessing.
-Cite the source numbers you used, like [1] or [2], at the end of a sentence.
-Never invent a timestamp, an episode, a character or a quote.
+Cite the source numbers you used, like [1] or [2], directly at the end of every factual statement.
+Never invent a timestamp, an episode, a character, an action or a quote.
 
 Season 1 Boundaries:
 - This collection strictly covers Friends Season 1 (24 episodes).
-- Never incorporate facts or relationships from subsequent seasons (such as Ross and Rachel being married, moving to London or Paris, having children together, or working at Ralph Lauren).
+- Never incorporate facts, relationships or events from subsequent seasons.
 - In Season 1, Ross and Rachel do not date or marry; Rachel only discovers Ross has feelings for her in the Season 1 finale (1x24).
-- Every statement must be supported by the supplied sources.
+- Every statement must be strictly supported by the supplied sources.
+
+Strict Factual Grounding:
+- Rely EXCLUSIVELY on the facts, visual descriptions, and dialogue lines explicitly present in the sources.
+- Do NOT extrapolate, speculate, or deduce unspoken thoughts, feelings or background facts not stated in the sources.
+- Do NOT import outside general knowledge from memory that is absent from the sources.
+- If a source only partly answers the question, explicitly state what is missing.
+- Visible presence, speaker identity, dialogue mention, and dialogue subject are separate evidence. UNKNOWN stays unknown.
 
 Counting questions:
 - A counted list in the sources is authoritative. Report its figure as the answer.
 - Do not add up rows yourself if a total is already given.
 - Do not count mentions inside prose; count the entries the sources list.
 
-Grounding:
-- Visible presence, speaker identity, dialogue mention, and dialogue subject are
-  separate evidence. A visible character is not a speaker. UNKNOWN stays unknown.
-- Use transcript speaker labels only when attached to that exact line. Captions
-  describe visual evidence; never use them to assign speech or conversation roles.
-- If the sources disagree, say so rather than picking one.
-- If a source only partly answers the question, say what is missing.
-
 Style:
-- Answer in the language the question was asked in.
-- Provide a detailed, comprehensive, and well-explained narrative answering the question thoroughly.
-- Explain the character interactions, motivations, context, and chronological progression in depth.
+- Answer directly and factually in the language the question was asked in.
+- State the relevant events, character actions, and dialogue strictly from the sources.
 - Support EVERY factual statement by citing the corresponding source numbers, like [1] or [2], directly at the end of that sentence.
-- Organize the explanation clearly with structured paragraphs and logical flow.
+- Keep the explanation grounded, clear, and concise.
 - Do not describe the interface.
 """
 
@@ -83,7 +84,7 @@ def _terms(text: str) -> set[str]:
     }
 
 
-def _matching_passage(caption: str, query: str, width: int = 240) -> str:
+def _matching_passage(caption: str, query: str, width: int = 360) -> str:
     """The part of a caption that overlaps the question.
 
     A scene caption covers a whole minute: six people, their clothing, the
@@ -109,7 +110,7 @@ def _matching_passage(caption: str, query: str, width: int = 240) -> str:
     return " ".join(words[best : best + width])
 
 
-def _matching_dialogue(scene, query: str, limit: int = 3) -> str:
+def _matching_dialogue(scene, query: str, limit: int = 5) -> str:
     """The dialogue lines that share terms with the question."""
     wanted = _terms(query)
     scored = []
@@ -147,7 +148,7 @@ def _matching_dialogue(scene, query: str, limit: int = 3) -> str:
             else ""
         )
         for line in matching
-    )[:320]
+    )[:800]
 
 
 _PRONOUN = re.compile(r"\b(he|she|him|her|his|hers|they|them|their)\b", re.I)
@@ -271,7 +272,16 @@ class ChatService:
                     "end": scene.end,
                     "timestamp_basis": scene.timestamp_basis,
                     "available": bool(scene.media and scene.media.path),
-                    "snippet": (caption or spoken)[:180],
+                    "snippet": (
+                        f"{passage[:320]}... Spoken: {spoken[:320]}"
+                        if spoken and passage
+                        else (passage or spoken or caption)[:400]
+                    ),
+                    "description": (
+                        f"{passage}\nSpoken: {spoken}"
+                        if spoken and passage
+                        else (passage or spoken or caption)
+                    ),
                     "seen": passage or caption,
                     "said": spoken or " ".join(f"{d.speaker}: {d.text}" for d in scene.dialogue if d.text),
                     "text": "\n".join(lines),

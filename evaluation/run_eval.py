@@ -193,10 +193,12 @@ def run_evaluation(
             else:
                 sources.append(vars(s))
 
-        contexts = [
-            f"[{s.get('number', i+1)}] {s.get('label', '')}: {s.get('snippet', s.get('description', ''))}"
-            for i, s in enumerate(sources)
-        ]
+        contexts = []
+        for i, s in enumerate(sources):
+            content = s.get("description") or s.get("snippet") or s.get("text") or ""
+            if s.get("said") and s.get("said") not in content:
+                content = f"{content} Spoken: {s['said']}".strip()
+            contexts.append(f"[{s.get('number', i+1)}] {s.get('label', '')}: {content}")
 
         # Domain Metrics (Method B)
         ver_res = evaluate_claim_verification(answer, sources, verifier=verifier)
